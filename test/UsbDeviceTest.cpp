@@ -3,7 +3,6 @@
 #include <coco/board/UsbDevice.hpp>
 
 
-
 // Test for USB device.
 // Flash this onto the device, then run UsbTestHost on a PC
 
@@ -36,14 +35,14 @@ static const usb::DeviceDescriptor deviceDescriptor = {
 
 // configuration descriptor
 struct UsbConfiguration {
-	struct usb::ConfigDescriptor config;
+	struct usb::ConfigurationDescriptor config;
 	struct usb::InterfaceDescriptor interface;
-	struct usb::EndpointDescriptor endpoints[2];
+	struct usb::EndpointDescriptor endpoints[4];
 };
 
 static const UsbConfiguration configurationDescriptor = {
 	.config = {
-		.bLength = sizeof(usb::ConfigDescriptor),
+		.bLength = sizeof(usb::ConfigurationDescriptor),
 		.bDescriptorType = usb::DescriptorType::CONFIGURATION,
 		.wTotalLength = sizeof(UsbConfiguration),
 		.bNumInterfaces = 1,
@@ -57,7 +56,7 @@ static const UsbConfiguration configurationDescriptor = {
 		.bDescriptorType = usb::DescriptorType::INTERFACE,
 		.bInterfaceNumber = 0,
 		.bAlternateSetting = 0,
-		.bNumEndpoints = std::size(configurationDescriptor.endpoints),
+		.bNumEndpoints = std::size(configurationDescriptor.endpoints), // number of endpoints, don't forget to call usb.enableEndpoints()
 		.bInterfaceClass = 0xff, // no class
 		.bInterfaceSubClass = 0xff,
 		.bInterfaceProtocol = 0xff,
@@ -78,6 +77,22 @@ static const UsbConfiguration configurationDescriptor = {
 		.bmAttributes = usb::EndpointType::BULK,
 		.wMaxPacketSize = 64,
 		.bInterval = 1 // polling interval
+	},
+	{
+		.bLength = sizeof(usb::EndpointDescriptor),
+		.bDescriptorType = usb::DescriptorType::ENDPOINT,
+		.bEndpointAddress = 2 | usb::IN, // 1 in (device to host)
+		.bmAttributes = usb::EndpointType::BULK,
+		.wMaxPacketSize = 64,
+		.bInterval = 1 // polling interval
+	},
+	{
+		.bLength = sizeof(usb::EndpointDescriptor),
+		.bDescriptorType = usb::DescriptorType::ENDPOINT,
+		.bEndpointAddress = 2 | usb::OUT, // 1 out (host to device)
+		.bmAttributes = usb::EndpointType::BULK,
+		.wMaxPacketSize = 64,
+		.bInterval = 1 // polling interval
 	}}
 };
 
@@ -89,14 +104,16 @@ uint8_t buffer[bufferSize];// __attribute__((aligned(4)));
 //uint8_t writeData[] = {0x12, 0x34, 0x56, 0x78, 0x9a};
 
 // echo data from host
-Coroutine echo(UsbDevice &usb) {
+Coroutine echo(UsbDevice &usb, int endpoint) {
 	while (true) {
+		debug::set(debug::BLUE);
+
 		// receive data from host
 		int length;
-		co_await usb.receive(1, buffer, bufferSize, length);
+		co_await usb.receive(endpoint, buffer, bufferSize, length);
 
 		// set green led to indicate processing
-		debug::setGreen();
+		debug::set(debug::GREEN);
 
 		// check received data
 		bool error = false;
@@ -108,7 +125,7 @@ Coroutine echo(UsbDevice &usb) {
 			debug::set(debug::RED);
 		
 		// send data back to host
-		co_await usb.send(1, buffer, length);
+		co_await usb.send(endpoint, buffer, length);
 
 		/*
 		// debug: send nrf52840 chip id
@@ -117,14 +134,14 @@ Coroutine echo(UsbDevice &usb) {
 		buffer[1] = variant >> 16;
 		buffer[2] = variant >> 8;
 		buffer[3] = variant;
-		co_await usb.send(1, 4, buffer);
+		co_await usb.send(endpoint, 4, buffer);
 
 		// debug: send nrf52840 interrupt priorities
 		buffer[0] = getInterruptPriority(USBD_IRQn);
 		buffer[1] = getInterruptPriority(RADIO_IRQn);
 		buffer[2] = getInterruptPriority(TIMER0_IRQn);
 		buffer[3] = getInterruptPriority(RNG_IRQn);
-		co_await usb.send(1, 4, buffer);
+		co_await usb.send(endpoint, 4, buffer);
 
 		// debug: send nrf5252840 UICR.NRFFW[0]
 		uint32_t offset = NRF_UICR->NRFFW[0];
@@ -132,22 +149,17 @@ Coroutine echo(UsbDevice &usb) {
 		buffer[1] = offset >> 8;
 		buffer[2] = offset >> 16;
 		buffer[3] = offset >> 24;
-		co_await usb.send(1, 4, buffer);
+		co_await usb.send(endpoint, 4, buffer);
 
 		// debug: read from flash
 		flash.readBlocking(0, 4, buffer);
 		buffer[4] = array::equal(4, writeData, buffer);
-		co_await usb.send(1, 5, buffer);
+		co_await usb.send(endpoint, 5, buffer);
 		*/
-
-		// clear green led and toggle blue led to indicate activity
-		debug::clearGreen();
-		debug::toggleBlue();
 	}
 }
 
 int main() {
-	loop::init();
 	debug::init();
 	board::UsbDevice usb(
 		[](usb::DescriptorType descriptorType) {
@@ -162,8 +174,8 @@ int main() {
 		},
 		[](UsbDevice &usb, uint8_t bConfigurationValue) {
 			// enable bulk endpoints 1 in and 1 out (keep control endpoint 0 enabled)
-			debug::setGreen(true);
-			usb.enableEndpoints(1 | (1 << 1), 1 | (1 << 1));
+			//debug::setGreen(true);
+			usb.enableEndpoints(1 | (1 << 1) | (1 << 2), 1 | (1 << 1) | (1 << 2));
 		},
 		[](uint8_t bRequest, uint16_t wValue, uint16_t wIndex) {
 			switch (Request(bRequest)) {
@@ -190,7 +202,8 @@ int main() {
 		});
 
 	// start to receive from usb host
-	echo(usb);
+	echo(usb, 1);
+	echo(usb, 2);
 
 	loop::run();
 	return 0;

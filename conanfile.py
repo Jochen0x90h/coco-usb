@@ -26,9 +26,9 @@ class Project(ConanFile):
     generators = "CMakeDeps"
     exports_sources = "conanfile.py", "CMakeLists.txt", "coco/*", "test/*"
     requires = [
-        "coco/0.1.0",
-        "coco-devboards/0.1.0", # only for testing
-        "coco-loop/0.1.0"
+        "coco/0.3.0",
+        "coco-devboards/0.2.0", # only for testing
+        "coco-loop/0.2.0" # only for testing
     ]
 
 
@@ -37,11 +37,6 @@ class Project(ConanFile):
         if hasattr(self, "settings_build"):
            return self.settings.os != self.settings_build.os
         return False
-
-    def requirements(self):
-        if not self.cross():
-            # platform is based on a "normal" operating system such as Windows or Linux
-            self.requires("libusb/1.0.26") # only for testing
 
     def configure(self):
         # pass platform option to dependencies
@@ -96,7 +91,7 @@ class Project(ConanFile):
         cmake.install()
 
     def package_info(self):
-        self.cpp_info.libs = ["coco-usb"]
+        self.cpp_info.libs = [self.name]
 
     def deploy(self):
         # install if CONAN_INSTALL_PREFIX env variable is set

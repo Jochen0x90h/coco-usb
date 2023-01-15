@@ -1,20 +1,33 @@
 add_library(${PROJECT_NAME})
 target_sources(${PROJECT_NAME}
 	PUBLIC FILE_SET headers TYPE HEADERS FILES
+		Stream.hpp
 		usb.hpp
 		UsbDevice.hpp
+		UsbHostDevice.hpp
 	PRIVATE
+		Stream.cpp
 		UsbDevice.cpp
+		UsbHostDevice.cpp
 )
 
 if(${PLATFORM} STREQUAL "native")
 	# native platform (Windows, MacOS, Linux)
 	target_sources(${PROJECT_NAME}
 		PUBLIC FILE_SET platform_headers TYPE HEADERS BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/native FILES
-			native/coco/platform/UsbDeviceOut.hpp
+			native/coco/platform/UsbDevice_cout.hpp
+			native/coco/platform/UsbHost_native.hpp
 		PRIVATE
-			native/coco/platform/UsbDeviceOut.cpp
+			native/coco/platform/UsbDevice_cout.cpp
 	)
+	if(WIN32)
+		target_sources(${PROJECT_NAME}
+			PUBLIC FILE_SET platform_headers FILES
+				native/coco/platform/UsbHost_Win32.hpp
+			PRIVATE
+				native/coco/platform/UsbHost_Win32.cpp
+		)	
+	endif()
 elseif(${PLATFORM} MATCHES "^nrf52")
 	target_sources(${PROJECT_NAME}
 		PUBLIC FILE_SET platform_headers TYPE HEADERS BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/nrf52 FILES

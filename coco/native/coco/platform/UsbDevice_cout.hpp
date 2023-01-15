@@ -7,22 +7,25 @@ namespace coco {
 /**
  * Implementation of an USB device that simply writes info about the transfer operations to std::cout
  */
-class UsbDeviceOut : public UsbDevice, public TimeHandler {
+class UsbDevice_cout : public UsbDevice, public YieldHandler {
 public:
+	// number of endpoints without endpoint 0
+	static constexpr int ENDPOINT_COUNT = 7;
+
 	/**
 	 * Constructor
 	 * @param getDescriptor callback for obtaining descriptors
 	 * @param onSetConfiguration callback for setting the configuration (libusb_set_configuration() on host), always called from event loop
 	 * @param onRequest callback for vendor specific request
 	 */
-	UsbDeviceOut(
+	UsbDevice_cout(
 		std::function<ConstData (usb::DescriptorType)> const &getDescriptor,
 		std::function<void (UsbDevice &usb, uint8_t bConfigurationValue)> const &onSetConfiguration,
 		std::function<bool (uint8_t bRequest, uint16_t wValue, uint16_t wIndex)> const &onRequest);
 
-	void enableEndpoints(uint8_t inFlags, uint8_t outFlags) override;
-	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int &length) override;
-	[[nodiscard]] Awaitable<SendParameters> send(int index, void const *data, int length) override;
+	void enableEndpoints(int inFlags, int outFlags) override;
+	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int &size) override;
+	[[nodiscard]] Awaitable<SendParameters> send(int index, void const *data, int size) override;
 
 	void activate() override;
 
@@ -37,7 +40,7 @@ protected:
 		Waitlist<SendParameters> sendWaitlist;
 	};
 
-	Endpoint endpoints[1];
+	Endpoint endpoints[ENDPOINT_COUNT];
 };
 
 } // namespace coco

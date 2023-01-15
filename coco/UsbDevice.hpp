@@ -3,7 +3,6 @@
 #include "usb.hpp"
 #include <coco/Coroutine.hpp>
 //#include <Data.hpp>
-#include <cstdint>
 #include <functional>
 
 
@@ -49,7 +48,7 @@ protected:
 
 
 /**
- * Interface to an USB device
+ * Interface for USB device support
  * 
  * https://www.beyondlogic.org/usbnutshell/usb1.shtml
  */
@@ -59,13 +58,13 @@ public:
 	// Internal helper: Stores the parameters and a reference to the result value in the awaitable during co_await
 	struct ReceiveParameters {
 		void *data;
-		int &length;
+		int &size;
 	};
 
 	// Internal helper: Stores the parameters in the awaitable during co_await
 	struct SendParameters {
 		void const *data;
-		int length;
+		int size;
 	};
 
 
@@ -76,27 +75,38 @@ public:
 	 * @param inFlags an enabled flag for each in endpoint
 	 * @param outFlags an enabled flag for each out endpoint
 	 */
-	virtual void enableEndpoints(uint8_t inFlags, uint8_t outFlags) = 0;
+	virtual void enableEndpoints(int inFlags, int outFlags) = 0;
 
 	/**
-	 * Suspend execution using co_await until data is received from an endpoint (OUT transfer)
-	 * @param index endpoint index (1-7)
-	 * @param length in: length of data buffer, out: length of data actually received
-	 * @param data data to receive, must be in RAM
+	 * Receive data from the host via an endpoint (OUT transfer)
+	 * @param index endpoint index
+	 * @param data data to receive, must be in RAM dependent on driver
+	 * @param size in: size of data buffer, out: number of bytes actually received
+	 * @return use co_await on return value to await completion
 	 */
-	[[nodiscard]] virtual Awaitable<ReceiveParameters> receive(int index, void *data, int &length) = 0;
-	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int length, int &transferred) {
-		transferred = length;
+	[[nodiscard]] virtual Awaitable<ReceiveParameters> receive(int index, void *data, int &size) = 0;
+
+	/**
+	 * Receive data from the host via an endpoint (OUT transfer)
+	 * @param index endpoint index
+	 * @param data data to receive, must be in RAM dependent on driver
+	 * @param size size of data buffer
+	 * @param transferred number of bytes actually received
+	 * @return use co_await on return value to await completion
+	 */
+	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int size, int &transferred) {
+		transferred = size;
 		return receive(index, data, transferred);
 	}
 
 	/**
-	 * Suspend execution using co_await until data is sent over an endpoint (IN transfer)
-	 * @param index endpoint index (1-7)
-	 * @param length data length
-	 * @param data data to send, must be in RAM
+	 * Send data to the host via an endpoint (IN transfer)
+	 * @param index endpoint index
+	 * @param data data to send, must be in RAM dependent on driver
+	 * @param size size of data buffer
+	 * @return use co_await on return value to await completion
 	 */
-	[[nodiscard]] virtual Awaitable<SendParameters> send(int index, void const *data, int length) = 0;
+	[[nodiscard]] virtual Awaitable<SendParameters> send(int index, void const *data, int size) = 0;
 
 };
 

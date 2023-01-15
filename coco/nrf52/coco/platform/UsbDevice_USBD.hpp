@@ -10,9 +10,6 @@ namespace coco {
  *
  * Resources:
  *           NRF_USBD
- *
- * Bugs:
- *      Workaround for Errata 199 needs to be added when using more than one endpoint: https://infocenter.nordicsemi.com/topic/errata_nRF52840_Rev2/ERR/nRF52840/Rev2/latest/anomaly_840_199.html
  */
 class UsbDevice_USBD : public UsbDevice, public Handler {
 public:
@@ -32,9 +29,9 @@ public:
 
 	~UsbDevice_USBD() override;
 
-	void enableEndpoints(uint8_t inFlags, uint8_t outFlags) override;
-	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int &length) override;
-	[[nodiscard]] Awaitable<SendParameters> send(int index, void const *data, int length) override;
+	void enableEndpoints(int inFlags, int outFlags) override;
+	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int &size) override;
+	[[nodiscard]] Awaitable<SendParameters> send(int index, void const *data, int size) override;
 
 	void handle() override;
 
