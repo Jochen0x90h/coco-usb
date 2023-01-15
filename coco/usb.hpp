@@ -17,6 +17,7 @@ namespace usb {
 enum class DescriptorType : uint8_t {
 	DEVICE = 1,
 	CONFIGURATION = 2,
+	STRING = 3,
 	INTERFACE = 4,
 	ENDPOINT = 5
 };
@@ -35,13 +36,13 @@ enum Direction {
 	IN = 0x80 // to host
 };
 
-// control request
-enum class Request : uint8_t {
+// control request type
+enum class RequestType : uint8_t {
 	// request type
-	TYPE_MASK = 0x3 << 5,
-	TYPE_STANDARD = 0x0 << 5,
-	TYPE_CLASS = 0x1 << 5,
-	TYPE_VENDOR = 0x2 << 5,
+	MASK = 0x3 << 5,
+	STANDARD = 0x0 << 5,
+	CLASS = 0x1 << 5,
+	VENDOR = 0x2 << 5,
 
 	// request recipient
 	RECIPIENT_MASK = 0x1f,
@@ -55,14 +56,14 @@ enum class Request : uint8_t {
 	IN = 0x80, // to host
 
 	// combinations
-	STANDARD_DEVICE_OUT = TYPE_STANDARD | RECIPIENT_DEVICE | OUT,
-	STANDARD_DEVICE_IN = TYPE_STANDARD | RECIPIENT_DEVICE | IN,
-	STANDARD_INTERFACE_OUT = TYPE_STANDARD | RECIPIENT_INTERFACE | OUT,
-	STANDARD_INTERFACE_IN = TYPE_STANDARD | RECIPIENT_INTERFACE | IN,
-	VENDOR_DEVICE_OUT = TYPE_VENDOR | RECIPIENT_DEVICE | OUT,
-	VENDOR_INTERFACE_OUT = TYPE_VENDOR | RECIPIENT_INTERFACE | OUT,
+	STANDARD_DEVICE_OUT = STANDARD | RECIPIENT_DEVICE | OUT,
+	STANDARD_DEVICE_IN = STANDARD | RECIPIENT_DEVICE | IN,
+	STANDARD_INTERFACE_OUT = STANDARD | RECIPIENT_INTERFACE | OUT,
+	STANDARD_INTERFACE_IN = STANDARD | RECIPIENT_INTERFACE | IN,
+	VENDOR_DEVICE_OUT = VENDOR | RECIPIENT_DEVICE | OUT,
+	VENDOR_INTERFACE_OUT = VENDOR | RECIPIENT_INTERFACE | OUT,
 };
-COCO_ENUM(Request)
+COCO_ENUM(RequestType)
 
 // device descriptor
 PACK(struct DeviceDescriptor {
@@ -83,7 +84,7 @@ PACK(struct DeviceDescriptor {
 });
 
 // configuration descriptor
-PACK(struct ConfigDescriptor {
+PACK(struct ConfigurationDescriptor {
 	uint8_t bLength;
 	DescriptorType bDescriptorType;
 	uint16_t wTotalLength;

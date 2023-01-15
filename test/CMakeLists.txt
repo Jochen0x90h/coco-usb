@@ -33,7 +33,7 @@ if(SERIES)
 			${BOARD}
 			coco::coco
 			coco-loop::coco-loop
-			coco-usb
+			${PROJECT_NAME}
 		)
 
 		# windows specific libraries
@@ -47,18 +47,22 @@ if(SERIES)
 endif()
 
 
-if(NOT ${CMAKE_CROSSCOMPILING})
+if(SERIES STREQUAL "native")
 	# Host program for USB device test: Run on host computer while USB device is connected
 	add_executable(UsbTestHost
 		UsbTestHost.cpp
-		libusb.hpp
 	)
 	target_include_directories(UsbTestHost
 		PRIVATE
 			..
 	)
 	target_link_libraries(UsbTestHost
-		coco::coco	
-		libusb::libusb
+		coco::coco
+		coco-loop::coco-loop
+		coco-usb
 	)
+	# windows specific libraries
+	if(WIN32)
+		target_link_libraries(UsbTestHost wsock32 ws2_32 winmm SetupAPI Winusb)
+	endif()
 endif()
