@@ -20,7 +20,7 @@ if(${PLATFORM} STREQUAL "native")
 		PRIVATE
 			native/coco/platform/UsbDevice_cout.cpp
 	)
-	if(WIN32)
+	if(${OS} STREQUAL "Windows")
 		target_sources(${PROJECT_NAME}
 			PUBLIC FILE_SET platform_headers FILES
 				native/coco/platform/UsbHost_Win32.hpp
@@ -41,7 +41,7 @@ endif()
 
 target_link_libraries(${PROJECT_NAME}
 	coco::coco
-	coco-loop::coco-loop # for loop::now() in native
+	coco-loop::coco-loop
 )
 
 target_include_directories(${PROJECT_NAME}

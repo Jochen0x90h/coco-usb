@@ -1,18 +1,12 @@
-#include <coco/loop.hpp>
+#include <coco/Loop.hpp>
 #include <coco/debug.hpp>
-#include <coco/board/UsbDevice.hpp>
+#include <UsbDeviceTest.hpp>
 
 
 // Test for USB device.
 // Flash this onto the device, then run UsbTestHost on a PC
 
 using namespace coco;
-
-enum class Request : uint8_t {
-	RED = 0,
-	GREEN = 1,
-	BLUE = 2
-};
 
 
 // device descriptor
@@ -97,114 +91,144 @@ static const UsbConfiguration configurationDescriptor = {
 };
 
 
-constexpr int bufferSize = 128;
-uint8_t buffer[bufferSize];// __attribute__((aligned(4)));
+// vendor test request
+enum class Request : uint8_t {
+	RED = 0,
+	GREEN = 1,
+	BLUE = 2,
+	GET_INFO = 3
+};
 
-//FlashImpl flash{0xe0000 - 0x20000, 2, 4096};
-//uint8_t writeData[] = {0x12, 0x34, 0x56, 0x78, 0x9a};
+
+// handle control requests
+Coroutine control(UsbDevice &device) {
+	while (true) {
+		usb::Setup setup;
+
+		// wait for a control request (https://www.beyondlogic.org/usbnutshell/usb6.shtml)
+		co_await device.request(setup);
+
+		// handle request
+		switch (setup.requestType) {
+		case usb::RequestType::STANDARD_DEVICE_IN:
+			switch (setup.request) {
+			case usb::Request::GET_DESCRIPTOR:
+				{
+					auto descriptorType = usb::DescriptorType(setup.value >> 8);
+					//int descriptorIndex = setup.value & 0xff;
+					switch (descriptorType) {
+					case usb::DescriptorType::DEVICE:
+						//debug::set(debug::CYAN);
+						co_await device.controlIn(setup, &deviceDescriptor);
+						break;
+					case usb::DescriptorType::CONFIGURATION:
+						co_await device.controlIn(setup, &configurationDescriptor);
+						break;
+					//case usb::DescriptorType::STRING:
+					default:
+						device.stall();
+					}
+				}
+				break;	
+			default:
+				device.stall();
+			}			
+			break;
+		case usb::RequestType::VENDOR_DEVICE_OUT:
+			switch (Request(setup.request)) {
+			case Request::RED:
+				device.acknowledge();
+				debug::setRed(setup.value != 0);
+				break;
+			case Request::GREEN:
+				device.acknowledge();
+				debug::setGreen(setup.index != 0);
+				break;
+			case Request::BLUE:
+				device.acknowledge();
+				debug::setBlue(setup.value == setup.index);
+				break;
+			case Request::GET_INFO:
+				{
+					uint32_t value = 0x01020304;
+#ifdef NRF52
+					value = NRF_FICR->INFO.VARIANT; // nrf52840 chip id
+					//value = NRF_UICR->NRFFW[0]; // flash end
+#endif
+					co_await device.controlIn(setup, &value);
+				}
+				break;
+			default:			
+				device.stall();
+			}
+			break;
+		default:
+			device.stall();
+		}
+	}
+}
+
+uint8_t data[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+Coroutine write(UsbDevice &device, Stream &stream) {
+	while (true) {
+
+		// wait until device is connected
+		co_await device.targetState(UsbDevice::State::CONNECTED);
+
+		while (device.isConnected()) {
+			// send data back to host
+			co_await stream.write(data);
+		}
+	}
+}
 
 // echo data from host
-Coroutine echo(UsbDevice &usb, int endpoint) {
+Coroutine echo(UsbDevice &device, Stream &stream) {
+	Buffer<uint8_t, 128> buffer;
 	while (true) {
-		debug::set(debug::BLUE);
+		debug::set(debug::YELLOW);
 
-		// receive data from host
-		int length;
-		co_await usb.receive(endpoint, buffer, bufferSize, length);
+		// wait until device is connected
+		co_await device.targetState(UsbDevice::State::CONNECTED);
 
-		// set green led to indicate processing
-		debug::set(debug::GREEN);
+		while (device.isConnected()) {
+			debug::set(debug::BLUE);
 
-		// check received data
-		bool error = false;
-		for (int i = 0; i < length; ++i) {
-			if (buffer[i] != length + i)
-				error = true;
+			// receive data from host
+			co_await stream.read(buffer);
+
+			// set green led to indicate processing
+			debug::set(debug::MAGENTA);
+
+			// check received data
+			bool error = false;
+			for (int i = 0; i < buffer.size(); ++i) {
+				if (buffer[i] != buffer.size() + i)
+					error = true;
+			}
+			if (error)
+				debug::set(debug::RED);
+			
+			// send data back to host
+			co_await stream.write(buffer);
 		}
-		if (error)
-			debug::set(debug::RED);
-		
-		// send data back to host
-		co_await usb.send(endpoint, buffer, length);
-
-		/*
-		// debug: send nrf52840 chip id
-		uint32_t variant = NRF_FICR->INFO.VARIANT;
-		buffer[0] = variant >> 24;
-		buffer[1] = variant >> 16;
-		buffer[2] = variant >> 8;
-		buffer[3] = variant;
-		co_await usb.send(endpoint, 4, buffer);
-
-		// debug: send nrf52840 interrupt priorities
-		buffer[0] = getInterruptPriority(USBD_IRQn);
-		buffer[1] = getInterruptPriority(RADIO_IRQn);
-		buffer[2] = getInterruptPriority(TIMER0_IRQn);
-		buffer[3] = getInterruptPriority(RNG_IRQn);
-		co_await usb.send(endpoint, 4, buffer);
-
-		// debug: send nrf5252840 UICR.NRFFW[0]
-		uint32_t offset = NRF_UICR->NRFFW[0];
-		buffer[0] = offset;
-		buffer[1] = offset >> 8;
-		buffer[2] = offset >> 16;
-		buffer[3] = offset >> 24;
-		co_await usb.send(endpoint, 4, buffer);
-
-		// debug: read from flash
-		flash.readBlocking(0, 4, buffer);
-		buffer[4] = array::equal(4, writeData, buffer);
-		co_await usb.send(endpoint, 5, buffer);
-		*/
 	}
 }
 
 int main() {
 	debug::init();
-	board::UsbDevice usb(
-		[](usb::DescriptorType descriptorType) {
-			switch (descriptorType) {
-			case usb::DescriptorType::DEVICE:
-				return ConstData(&deviceDescriptor);
-			case usb::DescriptorType::CONFIGURATION:
-				return ConstData(&configurationDescriptor);
-			default:
-				return ConstData();
-			}
-		},
-		[](UsbDevice &usb, uint8_t bConfigurationValue) {
-			// enable bulk endpoints 1 in and 1 out (keep control endpoint 0 enabled)
-			//debug::setGreen(true);
-			usb.enableEndpoints(1 | (1 << 1) | (1 << 2), 1 | (1 << 1) | (1 << 2));
-		},
-		[](uint8_t bRequest, uint16_t wValue, uint16_t wIndex) {
-			switch (Request(bRequest)) {
-			case Request::RED:
-				debug::setRed(wValue != 0);
-				// debug: erase flash and write
-				//flash.eraseSectorBlocking(0);
-				//flash.writeBlocking(0, 4, writeData + 1);
-				break;
-			case Request::GREEN:
-				//Debug::setLeds(wValue);
-				//Debug::toggleGreenLed();
-				debug::setGreen(wIndex != 0);
-				break;
-			case Request::BLUE:
-				//Debug::setLeds(wIndex);
-				//Debug::toggleBlueLed();
-				debug::setBlue(wValue == wIndex);
-				break;
-			default:
-				return false;
-			}
-			return true;
-		});
+	Drivers drivers;
 
 	// start to receive from usb host
-	echo(usb, 1);
-	echo(usb, 2);
+	control(drivers.device);
+#ifdef NATIVE
+	write(drivers.device, drivers.endpoint1);
+	write(drivers.device, drivers.endpoint2);
+#else	
+	echo(drivers.device, drivers.endpoint1);
+	echo(drivers.device, drivers.endpoint2);
+#endif
 
-	loop::run();
+	drivers.loop.run();
 	return 0;
 }

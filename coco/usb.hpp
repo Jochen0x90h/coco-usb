@@ -31,7 +31,7 @@ enum class EndpointType : uint8_t {
 };
 
 // endpoint transfer direction
-enum Direction {
+enum Direction : uint8_t {
 	OUT = 0, // to device
 	IN = 0x80 // to host
 };
@@ -39,31 +39,64 @@ enum Direction {
 // control request type
 enum class RequestType : uint8_t {
 	// request type
-	MASK = 0x3 << 5,
 	STANDARD = 0x0 << 5,
 	CLASS = 0x1 << 5,
 	VENDOR = 0x2 << 5,
+	TYPE_MASK = 0x3 << 5,
 
 	// request recipient
+	DEVICE = 0x00,
+	INTERFACE = 0x01,
+	ENDPOINT = 0x02,
+	OTHER = 0x03,
 	RECIPIENT_MASK = 0x1f,
-	RECIPIENT_DEVICE = 0x00,
-	RECIPIENT_INTERFACE = 0x01,
-	RECIPIENT_ENDPOINT = 0x02,
-	RECIPIENT_OTHER = 0x03,
 
 	// request direction
 	OUT = 0, // to device
 	IN = 0x80, // to host
+	DIRECTION_MASK = 0x80,
 
 	// combinations
-	STANDARD_DEVICE_OUT = STANDARD | RECIPIENT_DEVICE | OUT,
-	STANDARD_DEVICE_IN = STANDARD | RECIPIENT_DEVICE | IN,
-	STANDARD_INTERFACE_OUT = STANDARD | RECIPIENT_INTERFACE | OUT,
-	STANDARD_INTERFACE_IN = STANDARD | RECIPIENT_INTERFACE | IN,
-	VENDOR_DEVICE_OUT = VENDOR | RECIPIENT_DEVICE | OUT,
-	VENDOR_INTERFACE_OUT = VENDOR | RECIPIENT_INTERFACE | OUT,
+	STANDARD_DEVICE_OUT = STANDARD | DEVICE | OUT,
+	STANDARD_DEVICE_IN = STANDARD | DEVICE | IN,
+	STANDARD_INTERFACE_OUT = STANDARD | INTERFACE | OUT,
+	STANDARD_INTERFACE_IN = STANDARD | INTERFACE | IN,
+	STANDARD_ENDPOINT_OUT = STANDARD | ENDPOINT | OUT,
+	STANDARD_ENDPOINT_IN = STANDARD | ENDPOINT | IN,
+
+	VENDOR_DEVICE_OUT = VENDOR | DEVICE | OUT,
+	VENDOR_DEVICE_IN = VENDOR | DEVICE | IN,
+	VENDOR_INTERFACE_OUT = VENDOR | INTERFACE | OUT,
+	VENDOR_INTERFACE_IN = VENDOR | INTERFACE | IN,
+	VENDOR_ENDPOINT_OUT = VENDOR | ENDPOINT | OUT,
+	VENDOR_ENDPOINT_IN = VENDOR | ENDPOINT | IN
 };
 COCO_ENUM(RequestType)
+
+enum Request : uint8_t {
+	GET_STATUS = 0x00, // device, interface, endpoint
+	CLEAR_FEATURE = 0x01, // device, interface, endpoint
+	SET_FEATURE = 0x03, // device, interface, endpoint
+	SET_ADDRESS = 0x05, // device
+	GET_DESCRIPTOR = 0x06, // device
+	SET_DESCRIPTOR = 0x07, // device
+	GET_CONFIGURATION = 0x08, // device
+	SET_CONFIGURATION = 0x09, // device
+	GET_INTERFACE = 0x0a, // interface
+	SET_INTERFACE = 0x11, // interface
+	SYNCH_FRAME = 0x12 // endpoint
+};
+
+
+// setup packet of control request
+struct Setup {
+	usb::RequestType requestType;
+	uint8_t request;
+	uint16_t value;
+	uint16_t index;
+	uint16_t length;
+};
+
 
 // device descriptor
 PACK(struct DeviceDescriptor {
@@ -89,8 +122,8 @@ PACK(struct ConfigurationDescriptor {
 	DescriptorType bDescriptorType;
 	uint16_t wTotalLength;
 	uint8_t bNumInterfaces;
-	uint8_t bConfigurationValue;
-	uint8_t iConfiguration;
+	uint8_t bConfigurationValue; // value to use as an argument to select this configuration
+	uint8_t iConfiguration; // index of String Descriptor describing this configuration
 	uint8_t bmAttributes;
 	uint8_t bMaxPower;
 });

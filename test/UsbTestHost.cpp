@@ -2,8 +2,8 @@
 #include <coco/loop.hpp>
 #include <coco/String.hpp>
 #include <coco/StringBuffer.hpp>
-#include <coco/usb.hpp>
-#include <coco/platform/UsbHost_native.hpp>
+//#include <coco/platform/UsbHost_native.hpp>
+#include <UsbTestHost.hpp>
 #include <iostream>
 #include <iomanip>
 
@@ -13,7 +13,7 @@
 
 
 using namespace coco;
-using UsbHost = UsbHost_native;
+//using UsbHost = UsbHost_native;
 
 
 std::ostream &operator <<(std::ostream &s, String v) {
@@ -29,13 +29,13 @@ std::ostream &operator <<(std::ostream &s, dec v) {
 }
 
 struct hex {
-	hex(uint8_t i) : w(2), i(i) {}
-	hex(uint16_t i) : w(4), i(i) {}
+	hex(uint8_t v) : w(2), v(v) {}
+	hex(uint16_t v) : w(4), v(v) {}
 	int w;
-	int i;
+	unsigned int v;
 };
-std::ostream &operator <<(std::ostream &s, hex v) {
-	return s << std::setfill('0') << std::setw(v.w) << std::hex << v.i;
+std::ostream &operator <<(std::ostream &s, hex h) {
+	return s << std::setfill('0') << std::setw(h.w) << std::hex << h.v;
 }
 
 /*
@@ -166,13 +166,14 @@ static void printDevice(libusb_device *dev, int idVendor = 0, int idProduct = 0)
 enum class Request : uint8_t {
 	RED = 0,
 	GREEN = 1,
-	BLUE = 2
+	BLUE = 2,
+	GET_INFO = 3
 };
 
 inline Awaitable<UsbHostDevice::ControlParameters> controlOut(UsbHostDevice &device, Request request,
 	uint16_t wValue, uint16_t wIndex)
 {
-	return device.controlTransfer(usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, nullptr, 0);
+	return device.controlTransfer({usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex}, nullptr, 0);
 }
 
 
@@ -187,8 +188,8 @@ void printStatus(int endpoint, String message, bool ok) {
 	std::cout << std::endl;
 }
 
-Coroutine handler(UsbHostDevice &device, Stream &stream, int endpoint) {
-	StringBuffer<129> buffer;
+Coroutine handler(Loop &loop, UsbHostDevice &device, Stream &stream, int endpoint) {
+	StringBuffer<128> buffer;
 
 	while (true) {
 		// wait until device is connected
@@ -196,17 +197,19 @@ Coroutine handler(UsbHostDevice &device, Stream &stream, int endpoint) {
 		co_await device.targetState(UsbHostDevice::State::CONNECTED);
 
 		// test control request
-		co_await controlOut(device, Request::RED, 1, 0); // set on if wValue != 0
-		co_await controlOut(device, Request::RED, 0, 0);
-		co_await controlOut(device, Request::GREEN, 0, 1); // set on if wIndex != 0
-		co_await controlOut(device, Request::GREEN, 0, 0);
-		co_await controlOut(device, Request::BLUE, 5, 5); // set on if wValue == wIndex
-		co_await controlOut(device, Request::BLUE, 0, 256);
+		if (endpoint == 1) {
+			co_await controlOut(device, Request::RED, 1, 0); // set on if wValue != 0
+			co_await controlOut(device, Request::RED, 0, 0);
+			co_await controlOut(device, Request::GREEN, 0, 1); // set on if wIndex != 0
+			co_await controlOut(device, Request::GREEN, 0, 0);
+			co_await controlOut(device, Request::BLUE, 5, 5); // set on if wValue == wIndex
+			co_await controlOut(device, Request::BLUE, 0, 256);
+		}
 
 		// flush out data from last run
 		for (int i = 0; i < 4; ++i) {
-			int r = co_await select(stream.read(buffer), loop::sleep(100ms));
-			//std::cout << i << ' ' << r << std::endl;
+			int r = co_await select(stream.read(buffer), loop.sleep(100ms));
+			std::cout << i << ' ' << r << std::endl;
 		}
 
 		// echo loop: send data to device and check if we get back the same data
@@ -222,11 +225,6 @@ Coroutine handler(UsbHostDevice &device, Stream &stream, int endpoint) {
 			co_await stream.write(buffer);
 			printStatus(endpoint, "send", buffer.size() == sendLength);
 			allOk &= buffer.size() == sendLength;
-
-			// send zero length packet to indicate that transfer is complete if length is multiple of 64
-			if (sendLength > 0 && (sendLength & 63) == 0) {
-				co_await stream.write(nullptr, 0);
-			}
 
 			// receive from device (we get back the same data that we sent)
 			// note: usb driver does not wait for the zero length packet if device sends 128 bytes, therefore use 129 instead of 128
@@ -246,7 +244,7 @@ Coroutine handler(UsbHostDevice &device, Stream &stream, int endpoint) {
 			printStatus(endpoint, "all", allOk);
 
 			// wait
-			co_await loop::sleep(100ms);
+			co_await loop.sleep(100ms);
 
 			// modify the send length
 			sendLength = (sendLength + 5) % 129;
@@ -255,17 +253,12 @@ Coroutine handler(UsbHostDevice &device, Stream &stream, int endpoint) {
 }
 
 int main() {
-	UsbHost host;
-	UsbHost::Device device(host, [](const usb::DeviceDescriptor &deviceDescriptor) {
-		return deviceDescriptor.idVendor == 0x1915 && deviceDescriptor.idProduct == 0x1337;
-	});
-	UsbHost::BulkEndpoint endpoint1(device, 1);
-	UsbHost::BulkEndpoint endpoint2(device, 2);
+	Drivers drivers;
 
-	handler(device, endpoint1, 1);
-	//handler(device, endpoint2, 2);
+	handler(drivers.loop, drivers.device, drivers.endpoint1, 1);
+	handler(drivers.loop, drivers.device, drivers.endpoint2, 2);
 
-	loop::run();
+	drivers.loop.run();
 
 	return 0;
 }

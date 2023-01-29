@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usb.hpp"
+#include <coco/Buffer.hpp>
 #include <coco/Coroutine.hpp>
 
 
@@ -19,13 +20,11 @@ public:
 		CONNECTED
 	};
 
+	// Internal helper: Stores the parameters in Awaitable<> during co_await
 	struct ControlParameters : public WaitlistElement {
-		usb::RequestType requestType;
-		uint8_t request;
-		uint16_t value;
-		uint16_t index;
+		usb::Setup setup;
 		void *data;
-		uint16_t length;
+		int size;
 		void *context;
 		void (*cancelCallback)(ControlParameters &);
 
@@ -33,9 +32,9 @@ public:
 		ControlParameters() = default;
 
 		// constructor
-		ControlParameters(usb::RequestType requestType, uint8_t request, uint16_t value, uint16_t index, void *data,
-			uint16_t length, void *context, void (*cancelCallback)(ControlParameters &)) 
-			: requestType(requestType), request(request), value(value), index(index), data(data), length(length), context(context), cancelCallback(cancelCallback) {}
+		ControlParameters(usb::Setup const &setup, void *data, int size,
+			void *context, void (*cancelCallback)(ControlParameters &)) 
+			: setup(setup), data(data), size(size), context(context), cancelCallback(cancelCallback) {}
 			
 		// cancel read operation
 		void cancel() {this->cancelCallback(*this);}
@@ -72,10 +71,25 @@ public:
 */
 	/**
 	 * Control transfer to/from the device
-	 * @param requestType request type including the direction (IN: from device, OUT: to device)
+	 * @param setup control request setup packet where setup.requestType defines the data direction (IN: from device, OUT: to device)
+	 * @param data data to transfer
+	 * @param size size of data to transfer
+	 * @return use co_await on return value to await completion
 	 */
-	[[nodiscard]] virtual Awaitable<ControlParameters> controlTransfer(usb::RequestType requestType, uint8_t request,
-		uint16_t value, uint16_t index, void *data, uint16_t length) = 0;
+	[[nodiscard]] virtual Awaitable<ControlParameters> controlTransfer(const usb::Setup &setup,
+		void *data, int size) = 0;
+
+	template <typename T, int N>
+	[[nodiscard]] Awaitable<ControlParameters> controlIn(const usb::Setup &setup, Buffer<T, N> &buffer) {
+		buffer.length = N * sizeof(T);
+		return read(buffer.buffer, buffer.length);
+	}
+
+	template <typename T>
+	[[nodiscard]] Awaitable<ControlParameters> controlOut(const usb::Setup &setup, const T &array) {
+		const void *data = std::data(array);
+		return write(const_cast<void *>(data), std::size(array) * sizeof(*std::data(array)));
+	}
 
 
 	//virtual void setInterface(int index) = 0;

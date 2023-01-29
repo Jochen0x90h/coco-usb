@@ -15,11 +15,12 @@
 
 namespace coco {
 
-UsbHost_Win32::UsbHost_Win32() {
-	
+UsbHost_Win32::UsbHost_Win32(Loop_Win32 &loop)
+	: loop(loop)
+{	
 	// regularly scan for devices
-	this->time = loop::now();
-	coco::timeHandlers.add(*this);
+	this->time = loop.now();
+	loop.timeHandlers.add(*this);
 }
 
 UsbHost_Win32::~UsbHost_Win32() {
@@ -41,8 +42,8 @@ static int parseHex(const char *s) {
 	return value;
 }*/
 
-void UsbHost_Win32::activate() {
-	this->time = loop::now() + 1s;
+void UsbHost_Win32::handle() {
+	this->time = this->loop.now() + 1s;
 	
 	// enumerate devices
 	HDEVINFO deviceInfo = SetupDiGetClassDevsA(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -73,8 +74,7 @@ void UsbHost_Win32::activate() {
 		// check if device is new
 		auto p = this->deviceInfos.insert(std::map<std::string, Device *>::value_type{u.devicePath.DevicePath, nullptr});
 		if (p.second) {
-			// found a new device, path as the form \\?\usb#vid_1915&pid_1337#5&41045ef&0&4#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
-			//auto it = this->deviceInfos.insert(u.devicePath.DevicePath, nullptr).first;
+			// found a new device, path has the form \\?\usb#vid_1915&pid_1337#5&41045ef&0&4#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
 
 			// try to open the device
 			auto file = CreateFileA(p.first->first.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
@@ -101,13 +101,23 @@ void UsbHost_Win32::activate() {
 			// now check if a filter of a device accepts the device descriptor
 			for (Device &device : this->devices) {
 				if (device.state == Device::State::DISCONNECTED && device.filter(deviceDescriptor)) {
-					// transfer ownership to device
+					// add file to completion port
+					CompletionHandler *handler = &device;
+					CreateIoCompletionPort(
+						file,
+						this->loop.port,
+						(ULONG_PTR)handler,
+						0);
+					
+					// transfer ownership of file to device
 					device.it = p.first;
 					p.first->second = &device;
-					device.flag = true;
 					device.file = file;
 					device.interface = interface;
 					file = INVALID_HANDLE_VALUE;
+
+					// flag the device to indicate that it is present
+					device.flag = true;
 
 					// change state
 					device.state = Device::State::CONNECTED;
@@ -125,12 +135,13 @@ void UsbHost_Win32::activate() {
 				CloseHandle(file);
 			}
 		} else {
-			// flag the device
+			// flag the device to indicate that it is still present
 			if (p.first->second != nullptr)
 				p.first->second->flag = true;
 		}
 	}
 
+	// detect devices that have disappeared
 	for (Device &device : this->devices) {
 		if (device.isConnected() && !device.flag)
 			device.disconnect();
@@ -145,7 +156,6 @@ UsbHost_Win32::Device::Device(UsbHost_Win32 &host, std::function<bool (const usb
 	: host(host), filter(filter)
 {
 	host.devices.add(*this);
-	coco::yieldHandlers.add(*this);
 }
 
 UsbHost_Win32::Device::~Device() {
@@ -164,35 +174,26 @@ Awaitable<UsbHostDevice::State> UsbHost_Win32::Device::targetState(Device::State
 }
 
 static void cancelControlTransfer(UsbHostDevice::ControlParameters &p) {
-	UsbHost_Win32::Device &device = *reinterpret_cast<UsbHost_Win32::Device *>(p.context);
+	auto &device = *reinterpret_cast<UsbHost_Win32::Device *>(p.context);
 
-	CancelIoEx(device.file, &device.controlOverlapped);
-	
-	// wait until cancellation completes
-	DWORD transferred;
-	GetOverlappedResult(device.file, &device.controlOverlapped, &transferred, true);
-
-	device.transferring = false;
+	// cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
+	auto result = CancelIoEx(device.file, &device.controlOverlapped);
+	if (!result) {
+		auto e = GetLastError();
+		std::cout << "cancel error " << e << std::endl;
+	}
 	p.remove();
 }
 
-Awaitable<UsbHostDevice::ControlParameters> UsbHost_Win32::Device::controlTransfer(usb::RequestType requestType, uint8_t request,
-	uint16_t value, uint16_t index, void *data, uint16_t length)
+Awaitable<UsbHostDevice::ControlParameters> UsbHost_Win32::Device::controlTransfer(usb::Setup const &setup,
+	void *data, int size)
 {
+	assert(size < std::size(this->controlBuffer));
 	if (!isConnected())
 		return {};
-	if (!this->transferring) {
-		this->transferring = true;
-		WINUSB_SETUP_PACKET packet;
-		packet.RequestType = UCHAR(requestType);
-		packet.Request = request;
-		packet.Value = value;
-		packet.Index = index;
-		packet.Length = length;
-		memset(&this->controlOverlapped, 0, sizeof(OVERLAPPED));
-		WinUsb_ControlTransfer(this->interface, packet, (PUCHAR)data, length, nullptr, &controlOverlapped);
-	}
-	return {this->controlWaitlist, requestType, request, value, index, data, length, this, cancelControlTransfer};
+	if (!this->transferring) 
+		startTransfer(setup, data, size);
+	return {this->controlWaitlist, setup, data, size, this, cancelControlTransfer};
 }
 /*
 void UsbHost_Win32::Device::getDescriptor(usb::DescriptorType type, void *data, int &size) {
@@ -203,14 +204,38 @@ void UsbHost_Win32::Device::getDescriptor(usb::DescriptorType type, void *data, 
 	size = result ? transferred : 0;
 }*/
 
-void UsbHost_Win32::Device::activate() {
+void UsbHost_Win32::Device::startTransfer(const usb::Setup &setup, void *data, int size) {
+	/*WINUSB_SETUP_PACKET packet;
+	packet.RequestType = UCHAR(setup.requestType);
+	packet.Request = setup.request;
+	packet.Value = setup.value;
+	packet.Index = setup.index;
+	packet.Length = setup.length;*/
+
+	if ((setup.requestType & usb::RequestType::DIRECTION_MASK) == usb::RequestType::OUT)
+		memcpy(this->controlBuffer, data, size);
+	memset(&this->controlOverlapped, 0, sizeof(OVERLAPPED));
+	auto result = WinUsb_ControlTransfer(this->interface, (const WINUSB_SETUP_PACKET &)setup,
+		this->controlBuffer, size, nullptr, &this->controlOverlapped);
+	this->transferring = true;
+}
+
+void UsbHost_Win32::Device::handle(OVERLAPPED *overlapped) {
 	// check if control transfer finished
-	if (this->transferring) {
+	if (this->transferring && overlapped == &this->controlOverlapped) {
 		DWORD transferred;
 		auto result = GetOverlappedResult(this->file, &this->controlOverlapped, &transferred, false);
 		if (!result) {
 			auto error = GetLastError();
-			if (error != ERROR_IO_INCOMPLETE) {
+			if (error == ERROR_OPERATION_ABORTED) {
+				// cancelled
+				this->transferring = false;
+
+				// start next control transfer operation
+				this->controlWaitlist.visitFirst([this](ControlParameters &p) {
+					startTransfer(p.setup, p.data, p.size);
+				});
+			} else if (error != ERROR_IO_INCOMPLETE) {
 				// "real" error: return zero length buffer
 				transferred = 0;
 				result = true;
@@ -222,27 +247,28 @@ void UsbHost_Win32::Device::activate() {
 		}
 
 		if (result) {
-			this->transferring = false;
-
-			// start next control transfer operation
-			this->controlWaitlist.visitSecond([this](ControlParameters &p) {
-				this->transferring = true;
-				WINUSB_SETUP_PACKET packet;
-				packet.RequestType = UCHAR(p.requestType);
-				packet.Request = p.request;
-				packet.Value = p.value;
-				packet.Index = p.index;
-				packet.Length = p.length;
-				memset(&this->controlOverlapped, 0, sizeof(OVERLAPPED));
-				auto result = WinUsb_ControlTransfer(this->interface, packet, (PUCHAR)p.data, p.length, nullptr, &this->controlOverlapped);
-			});
-
 			// resume waiting coroutine			
-			this->controlWaitlist.resumeFirst([transferred](ControlParameters &p) {
+			this->controlWaitlist.resumeFirst([this, transferred](ControlParameters &p) {
+				// copy buffer
+				if ((p.setup.requestType & usb::RequestType::DIRECTION_MASK) == usb::RequestType::IN)
+					memcpy(p.data, this->controlBuffer, transferred);
+					//std::copy(this->controlBuffer, this->controlBuffer + transferred, reinterpret_cast<uint8_t *>(p.data));
+
 				//*p.size = transferred;
 				return true;
 			});
+
+			this->transferring = false;
+
+			// start next control transfer operation
+			this->controlWaitlist.visitFirst([this](ControlParameters &p) {
+				startTransfer(p.setup, p.data, p.size);
+			});
 		}
+	}
+
+	for (auto &endpoint : this->bulkEndpoints) {
+		endpoint.handle(overlapped);
 	}
 }
 
@@ -285,10 +311,9 @@ void UsbHost_Win32::Device::disconnect() {
 
 // BulkEndpoint
 
-UsbHost_Win32::BulkEndpoint::BulkEndpoint(Device &device, int inAddress, int outAddress)
-	: device(device), inAddress(inAddress), outAddress(outAddress)
+UsbHost_Win32::BulkEndpoint::BulkEndpoint(Device &device, int inAddress, int outAddress, bool packet)
+	: device(device), inAddress(inAddress), outAddress(outAddress), readPacket(packet), writePacket(packet)
 {
-	coco::yieldHandlers.add(*this);
 	device.bulkEndpoints.add(*this);
 }
 
@@ -296,63 +321,82 @@ UsbHost_Win32::BulkEndpoint::~BulkEndpoint() {
 }
 
 static void cancelRead(Stream::ReadParameters &p) {
-	UsbHost_Win32::BulkEndpoint &endpoint = *reinterpret_cast<UsbHost_Win32::BulkEndpoint *>(p.context);
+	auto &endpoint = *reinterpret_cast<UsbHost_Win32::BulkEndpoint *>(p.context);
 
-	CancelIoEx(endpoint.device.file, &endpoint.readOverlapped);
-	
-	// wait until cancellation completes
-	DWORD transferred;
-	GetOverlappedResult(endpoint.device.file, &endpoint.readOverlapped, &transferred, true);
-
-	endpoint.reading = false;
+	// cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
+	auto result = CancelIoEx(endpoint.device.file, &endpoint.readOverlapped);
+	if (!result) {
+		auto e = GetLastError();
+		std::cout << "cancel error " << e << std::endl;
+	}
 	p.remove();
 }
 
-Awaitable<Stream::ReadParameters> UsbHost_Win32::BulkEndpoint::read(void *data, int &size) {
+Awaitable<Stream::ReadParameters> UsbHost_Win32::BulkEndpoint::read(void *data, int &size/*, bool packet*/) {
 	if (!this->device.isConnected())
 		return {};
-	if (!this->reading) {
-		// start reading
-		this->reading = true;
-		memset(&this->readOverlapped, 0, sizeof(OVERLAPPED));
-		auto result = WinUsb_ReadPipe(this->device.interface, this->inAddress, (UCHAR*)data, size, nullptr, &this->readOverlapped);
-	}
-	return {this->readWaitlist, data, &size, this, cancelRead};
+	if (!this->reading)
+		startRead(data, size/*, packet*/);
+	return {this->readWaitlist, data, &size, /*packet,*/ this, cancelRead};
 }
 
 static void cancelWrite(Stream::WriteParameters &p) {
-	UsbHost_Win32::BulkEndpoint &endpoint = *reinterpret_cast<UsbHost_Win32::BulkEndpoint *>(p.context);
+	auto &endpoint = *reinterpret_cast<UsbHost_Win32::BulkEndpoint *>(p.context);
 
-	CancelIoEx(endpoint.device.file, &endpoint.writeOverlapped);
-	
-	// wait until cancellation completes
-	DWORD transferred;
-	GetOverlappedResult(endpoint.device.file, &endpoint.writeOverlapped, &transferred, true);
-
-	endpoint.writing = false;
+	// cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
+	auto result = CancelIoEx(endpoint.device.file, &endpoint.writeOverlapped);
+	if (!result) {
+		auto e = GetLastError();
+		std::cout << "cancel error " << e << std::endl;
+	}
 	p.remove();
 }
 
-Awaitable<Stream::WriteParameters> UsbHost_Win32::BulkEndpoint::write(void const *data, int size) {
+Awaitable<Stream::WriteParameters> UsbHost_Win32::BulkEndpoint::write(void const *data, int size/*, bool packet*/) {
 	if (!this->device.isConnected())
 		return {};
-	if (!this->writing) {
-		// start writing
-		this->writing = true;
-		memset(&this->writeOverlapped, 0, sizeof(OVERLAPPED));
-		auto result = WinUsb_WritePipe(this->device.interface, this->outAddress, (UCHAR*)data, size, nullptr, &this->writeOverlapped);
-	}
-	return {this->writeWaitlist, data, size, this, cancelWrite};
+	if (!this->writing)
+		startWrite(data, size/*, packet*/);
+	return {this->writeWaitlist, data, size/*, packet*/, this, cancelWrite};
 }
 
-void UsbHost_Win32::BulkEndpoint::activate() {
+void UsbHost_Win32::BulkEndpoint::startRead(void *data, int size/*, bool packet*/) {
+	//this->readPacket = packet;
+	int toRead = size < std::size(this->readBuffer) && !this->readPacket ? size : std::size(this->readBuffer);
+	memset(&this->readOverlapped, 0, sizeof(OVERLAPPED));
+	auto result = WinUsb_ReadPipe(this->device.interface, this->inAddress, this->readBuffer, toRead, nullptr, &this->readOverlapped);
+	this->reading = true;
+	this->readData = reinterpret_cast<uint8_t *>(data);
+	this->readSize = size;
+}
+
+void UsbHost_Win32::BulkEndpoint::startWrite(const void *data, int size/*, bool packet*/) {
+	int toWrite = std::min(size, int(std::size(this->writeBuffer)));
+	memcpy(this->writeBuffer, data, toWrite);
+	memset(&this->writeOverlapped, 0, sizeof(OVERLAPPED));
+	auto result = WinUsb_WritePipe(this->device.interface, this->outAddress, this->writeBuffer, toWrite, nullptr, &this->writeOverlapped);
+	this->writing = true;
+	this->writeData = reinterpret_cast<const uint8_t *>(data);
+	this->writeSize = size;
+	//this->writePacket = packet;
+}
+
+void UsbHost_Win32::BulkEndpoint::handle(OVERLAPPED *overlapped) {
 	// check if read finished
-	if (this->reading) {
+	if (this->reading && overlapped == &this->readOverlapped) {
 		DWORD transferred;
 		auto result = GetOverlappedResult(this->device.file, &this->readOverlapped, &transferred, false);
 		if (!result) {
 			auto error = GetLastError();
-			if (error != ERROR_IO_INCOMPLETE) {
+			if (error == ERROR_OPERATION_ABORTED) {
+				// cancelled
+				this->reading = false;
+
+				// start next read operation
+				this->readWaitlist.visitFirst([this](ReadParameters &p) {
+					startRead(p.data, *p.size);//, p.packet);
+				});
+			} else if (error != ERROR_IO_INCOMPLETE) {
 				// "real" error: return zero length buffer
 				transferred = 0;
 				result = true;
@@ -364,30 +408,49 @@ void UsbHost_Win32::BulkEndpoint::activate() {
 		}
 
 		if (result) {
-			this->reading = false;
+			// copy data into read buffer
+			auto readData = this->readData;
+			int readSize = this->readSize;
+			int t = std::min(readSize, int(transferred));
+			memcpy(readData, this->readBuffer, t);
+			//std::copy(this->readBuffer, this->readBuffer + t, readData);
+			readData += t;
+			readSize -= t;
+			if ((this->readPacket || readSize > 0) && transferred >= std::size(this->readBuffer)) {
+				// more to read
+				startRead(readData, readSize);//, this->readPacket);
+			} else {
+				// resume waiting coroutine			
+				this->readWaitlist.resumeFirst([readData](ReadParameters &p) {
+					*p.size = readData - reinterpret_cast<uint8_t *>(p.data);
+					return true;
+				});
 
-			// start next read operation
-			this->readWaitlist.visitSecond([this](ReadParameters &p) {
-				this->reading = true;
-				memset(&this->readOverlapped, 0, sizeof(OVERLAPPED));
-				auto result = WinUsb_ReadPipe(this->device.interface, this->inAddress, (UCHAR*)p.data, *p.size, nullptr, &this->readOverlapped);
-			});
+				this->reading = false;
 
-			// resume waiting coroutine			
-			this->readWaitlist.resumeFirst([transferred](ReadParameters &p) {
-				*p.size = transferred;
-				return true;
-			});
+				// start next read operation
+				this->readWaitlist.visitFirst([this](ReadParameters &p) {
+					startRead(p.data, *p.size);//, p.packet);
+				});
+			}
 		}
 	}
 
 	// check if write finished
-	if (this->writing) {
+	if (this->writing && overlapped == &this->writeOverlapped) {
 		DWORD transferred;
 		auto result = GetOverlappedResult(this->device.file, &this->writeOverlapped, &transferred, false);
 		if (!result) {
 			auto error = GetLastError();
-			if (error != ERROR_IO_INCOMPLETE) {
+			if (error == ERROR_OPERATION_ABORTED) {
+				// cancelled
+				this->writing = false;
+
+				// start next write operation
+				this->writeWaitlist.visitFirst([this](WriteParameters &p) {
+					startWrite(p.data, p.size);//, p.packet);
+				});
+			} else if (error != ERROR_IO_INCOMPLETE) {
 				// "real" error: return zero length buffer
 				transferred = 0;
 				result = true;
@@ -399,19 +462,24 @@ void UsbHost_Win32::BulkEndpoint::activate() {
 		}
 
 		if (result) {
-			this->writing = false;
-		
-			// start next write operation
-			this->writeWaitlist.visitSecond([this](WriteParameters &p) {
-				this->writing = true;
-				memset(&this->writeOverlapped, 0, sizeof(OVERLAPPED));
-				auto result = WinUsb_WritePipe(this->device.interface, this->outAddress, (UCHAR*)p.data, p.size, nullptr, &this->writeOverlapped);
-			});
+			auto writeData = this->writeData + transferred;
+			int writeSize = this->writeSize - transferred;
+			if (writeSize > 0 || (this->writePacket && transferred > 0 && (transferred & 63) == 0)) { //todo: get packet size from endpoint descriptor
+				// more to write
+				startWrite(writeData, writeSize);//, this->writePacket);
+			} else {
+				// resume waiting coroutine			
+				this->writeWaitlist.resumeFirst([](WriteParameters &p) {
+					return true;
+				});		
 
-			// resume waiting coroutine			
-			this->writeWaitlist.resumeFirst([](WriteParameters &p) {
-				return true;
-			});		
+				this->writing = false;
+			
+				// start next write operation
+				this->writeWaitlist.visitFirst([this](WriteParameters &p) {
+					startWrite(p.data, p.size);//, p.packet);
+				});
+			}
 		}
 	}
 }
