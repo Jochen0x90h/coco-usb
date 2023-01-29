@@ -1,3 +1,5 @@
+#pragma once
+
 #ifdef _WIN32
 #include "UsbHost_Win32.hpp"
 namespace coco {

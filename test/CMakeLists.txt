@@ -10,59 +10,63 @@ macro(generate_hex TARGET)
 	endif()
 endmacro()
 
-if(SERIES)
-	# generate UsbDeviceTest for every board
-	foreach(BOARD ${coco-devboards_COMPONENT_NAMES})
-		string(REGEX REPLACE ".*\\:" "UsbDeviceTest-" NAME ${BOARD})
+# iterate over boards and generate tests
+foreach(COMPONENT ${coco-devboards_COMPONENT_NAMES})
+	string(REGEX REPLACE ".*\\:" "" BOARD ${COMPONENT})
+	message("*** Boad: ${BOARD}")
+	
+	# check if board specific header exists
+	if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${BOARD}/UsbDeviceTest.hpp)
+		set(NAME "UsbDeviceTest-${BOARD}")
+
 		add_executable(${NAME}
 			UsbDeviceTest.cpp
 		)
 		target_include_directories(${NAME}
 			PRIVATE
 				../
+				${BOARD}
 		)
 
 		# find link.ld of board
-		get_target_property(INCLUDES ${BOARD} INTERFACE_INCLUDE_DIRECTORIES)
+		get_target_property(INCLUDES ${COMPONENT} INTERFACE_INCLUDE_DIRECTORIES)
 		target_link_directories(${NAME}
 			PRIVATE	
 				${INCLUDES}
 		)
 
 		target_link_libraries(${NAME}
-			${BOARD}
+			${COMPONENT}
 			coco::coco
 			coco-loop::coco-loop
 			${PROJECT_NAME}
 		)
 
-		# windows specific libraries
-		if(WIN32)
-			target_link_libraries(${NAME} wsock32 ws2_32 winmm)
-		endif()
-
 		# generate hex file for flashing the target
 		generate_hex(${NAME})
-	endforeach()
-endif()
-
-
-if(SERIES STREQUAL "native")
-	# Host program for USB device test: Run on host computer while USB device is connected
-	add_executable(UsbTestHost
-		UsbTestHost.cpp
-	)
-	target_include_directories(UsbTestHost
-		PRIVATE
-			..
-	)
-	target_link_libraries(UsbTestHost
-		coco::coco
-		coco-loop::coco-loop
-		coco-usb
-	)
-	# windows specific libraries
-	if(WIN32)
-		target_link_libraries(UsbTestHost wsock32 ws2_32 winmm SetupAPI Winusb)
 	endif()
-endif()
+	
+	# check if board specific header exists
+	if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${BOARD}/UsbTestHost.hpp)
+		# Host program for USB device test: Run on host computer while USB device is connected
+		set(NAME "UsbTestHost-${BOARD}")
+
+		add_executable(${NAME}
+			UsbTestHost.cpp
+		)
+		target_include_directories(${NAME}
+			PRIVATE
+				../
+				${BOARD}
+		)
+		target_link_libraries(${NAME}
+			coco::coco
+			coco-loop::coco-loop
+			coco-usb
+		)
+		# windows specific libraries
+		if(WIN32)
+			target_link_libraries(${NAME} SetupAPI Winusb)
+		endif()
+	endif()
+endforeach()

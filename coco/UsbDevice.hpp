@@ -1,51 +1,13 @@
 #pragma once
 
 #include "usb.hpp"
+#include <coco/ArrayConcept.hpp>
+#include <coco/Buffer.hpp>
 #include <coco/Coroutine.hpp>
-//#include <Data.hpp>
-#include <functional>
+#include <coco/PointerConcept.hpp>
 
 
 namespace coco {
-
-/**
- * Data wrapper, only references the data
- */
-class ConstData {
-public:
-
-	constexpr ConstData() : s(0), d(nullptr) {}
-
-	ConstData(void const *data, int size) : s(size), d(data) {}
-
-	template <typename T>
-	constexpr ConstData(T const *data) : s(sizeof(T)), d(data) {}
-
-	/**
-	 * Get size of data in bytes
-	 * @return size
-	 */
-	int size() {return this->s;}
-
-	/**
-	 * Get pointer to the data
-	 * @return data
-	 */
-	void const *data() {return this->d;}
-
-	template <typename T>
-	T const *cast() {
-		assert(sizeof(T) >= this->s);
-		return reinterpret_cast<T const *>(this->d);
-	}
-
-protected:
-
-	int const s;
-	void const *const d;
-};
-
-
 
 /**
  * Interface for USB device support
@@ -55,59 +17,96 @@ protected:
 class UsbDevice {
 public:
 
-	// Internal helper: Stores the parameters and a reference to the result value in the awaitable during co_await
-	struct ReceiveParameters {
-		void *data;
-		int &size;
+	enum class State {
+		DISCONNECTED,
+		CONNECTED
 	};
 
-	// Internal helper: Stores the parameters in the awaitable during co_await
-	struct SendParameters {
-		void const *data;
+	// Internal helper: Stores the parameters in Awaitable<> during co_await
+	struct ControlParameters : public WaitlistElement {
+		void *data;
 		int size;
+		void *context;
+		void (*cancelCallback)(ControlParameters &);
+
+		// default constructor
+		ControlParameters() = default;
+
+		// constructor
+		ControlParameters(void *data, int size, void *context, void (*cancelCallback)(ControlParameters &))
+			: data(data), size(size), context(context), cancelCallback(cancelCallback) {}
+			
+		// cancel read operation
+		void cancel() {this->cancelCallback(*this);}
 	};
 
 
 	virtual ~UsbDevice();
 
 	/**
-	 * Enable endpoints. Can be done in onSetConfiguration. Endpoint 0 should stay enabled
-	 * @param inFlags an enabled flag for each in endpoint
-	 * @param outFlags an enabled flag for each out endpoint
+	 * Get the current state of the device 
 	 */
-	virtual void enableEndpoints(int inFlags, int outFlags) = 0;
+	virtual State getState() = 0;
+	bool isConnected() {return getState() == State::CONNECTED;}
 
 	/**
-	 * Receive data from the host via an endpoint (OUT transfer)
-	 * @param index endpoint index
-	 * @param data data to receive, must be in RAM dependent on driver
-	 * @param size in: size of data buffer, out: number of bytes actually received
-	 * @return use co_await on return value to await completion
+	 * Wait until the device is in the given target state (e.g. co_await device.targetState(State::CONNECTED))
+	 * @param state target state
+	 * @return use co_await on return value to await the given state
 	 */
-	[[nodiscard]] virtual Awaitable<ReceiveParameters> receive(int index, void *data, int &size) = 0;
+	[[nodiscard]] virtual Awaitable<State> targetState(State state) = 0;
 
 	/**
-	 * Receive data from the host via an endpoint (OUT transfer)
-	 * @param index endpoint index
-	 * @param data data to receive, must be in RAM dependent on driver
-	 * @param size size of data buffer
-	 * @param transferred number of bytes actually received
+	 * Wait for a request from the host
+	 * @param setup contents of the setup packet where setup.requestType determines the direction
+	 * @return use co_await on return value to wait for a request
+	 */
+	[[nodiscard]] virtual Awaitable<usb::Setup *> request(usb::Setup &setup) = 0;
+
+	/**
+	 * Control transfer to/from the device
+	 * @param data data to transfer
+	 * @param size size of data to transfer
 	 * @return use co_await on return value to await completion
 	 */
-	[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int size, int &transferred) {
-		transferred = size;
-		return receive(index, data, transferred);
+	[[nodiscard]] virtual Awaitable<ControlParameters> controlTransfer(void *data, int size) = 0;
+
+	template <typename T> requires (ArrayConcept<T>)
+	[[nodiscard]] Awaitable<ControlParameters> controlIn(usb::Setup const &setup, const T &array) {
+		const void *d = std::data(array);
+		int size = std::min(int(setup.length), std::size(array) * sizeof(*std::data(array)));
+		return controlTransfer(const_cast<void *>(d), size);
+	}
+
+	template <typename T> requires (PointerConcept<T>)
+	[[nodiscard]] Awaitable<ControlParameters> controlIn(usb::Setup const &setup, T pointer) {
+		auto &data = *pointer;
+		int size = std::min(int(setup.length), int(sizeof(data)));
+		return controlTransfer((void *)pointer, size);
+	}
+
+	template <typename T>
+	[[nodiscard]] Awaitable<ControlParameters> controlOut(usb::Setup const &setup, T *data) {
+		int size = std::min(int(setup.length), int(sizeof(T)));
+		return controlTransfer(data, size);
+	}
+
+	template <typename T, int N>
+	[[nodiscard]] Awaitable<ControlParameters> controlOut(usb::Setup const &setup, Buffer<T, N> &buffer) {
+		int size = std::min(int(setup.length), N);
+		buffer.length = size;
+		return controlTransfer(buffer.buffer, size);
 	}
 
 	/**
-	 * Send data to the host via an endpoint (IN transfer)
-	 * @param index endpoint index
-	 * @param data data to send, must be in RAM dependent on driver
-	 * @param size size of data buffer
-	 * @return use co_await on return value to await completion
+	 * Acknowledge a conrol request without data stage
 	 */
-	[[nodiscard]] virtual Awaitable<SendParameters> send(int index, void const *data, int size) = 0;
+	virtual void acknowledge() = 0;
 
+	/**
+	 * Indicate that a control request is not supported or has invalid parameters
+	 */
+	virtual void stall() = 0;
 };
 
 } // namespace coco
