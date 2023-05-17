@@ -1,8 +1,8 @@
 #pragma once
 
 #ifdef _WIN32
-#include "UsbHost_Win32.hpp"
+#include "UsbHost_WinUSB.hpp"
 namespace coco {
-using UsbHost_native = UsbHost_Win32;
+using UsbHost_native = UsbHost_WinUSB;
 }
 #endif

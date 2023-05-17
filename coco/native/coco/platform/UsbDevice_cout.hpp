@@ -1,95 +1,119 @@
 #pragma once
 
 #include <coco/UsbDevice.hpp>
-#include <coco/Stream.hpp>
+#include <coco/BufferImpl.hpp>
 #include <coco/platform/Loop_native.hpp>
 
 
 namespace coco {
 
 /**
- * Implementation of an USB device that simply writes info about the transfer operations to std::cout
- */
-class UsbDevice_cout : public UsbDevice, public YieldHandler {
+	Implementation of an USB device that simply writes info about the transfer operations to std::cout
+*/
+class UsbDevice_cout : public UsbDevice, public Loop_native::YieldHandler {
 public:
-	// number of endpoints without endpoint 0
-	//static constexpr int ENDPOINT_COUNT = 7;
-
 	/**
-	 * Constructor
-	 * @param getDescriptor callback for obtaining descriptors
-	 * @param onSetConfiguration callback for setting the configuration (libusb_set_configuration() on host), always called from event loop
-	 * @param onRequest callback for vendor specific request
-	 */
-	UsbDevice_cout(Loop_native &loop);/*
-		std::function<ConstData (usb::DescriptorType)> const &getDescriptor,
-		std::function<void (UsbDevice &usb, uint8_t bConfigurationValue)> const &onSetConfiguration,
-		std::function<bool (uint8_t bRequest, uint16_t wValue, uint16_t wIndex)> const &onRequest);*/
+		Constructor
+		@param getDescriptor callback for obtaining descriptors
+		@param onSetConfiguration callback for setting the configuration (libusb_set_configuration() on host), always called from event loop
+		@param onRequest callback for vendor specific request
+	*/
+	UsbDevice_cout(Loop_native &loop);
 
-	//void enableEndpoints(int inFlags, int outFlags) override;
-	//[[nodiscard]] Awaitable<ReceiveParameters> receive(int index, void *data, int &size) override;
-	//[[nodiscard]] Awaitable<SendParameters> send(int index, void const *data, int size) override;
-	State getState() override;
-	bool isConnected() {return this->state == State::CONNECTED;}
-	[[nodiscard]] Awaitable<State> targetState(State state) override;
+	State state() override;
+	bool ready() {return this->stat == State::READY;}
+	[[nodiscard]] Awaitable<State> untilState(State state) override;
 
 	[[nodiscard]] Awaitable<usb::Setup *> request(usb::Setup &setup) override;
-	[[nodiscard]] Awaitable<ControlParameters> controlTransfer(void *data, int size) override;
 
 	void acknowledge() override;
 	void stall() override;
 
 
-	class BulkEndpoint : public Stream, public LinkedListNode<BulkEndpoint> {
+	/**
+		Buffer for control transfers
+	*/
+	class ControlBuffer : public LinkedListNode, public LinkedListNode2, public BufferImpl {
 		friend class UsbDevice_cout;
 	public:
-	
-		BulkEndpoint(UsbDevice_cout &device, int index) : device(device), index(index) {}
+		ControlBuffer(UsbDevice_cout &device, int size);
+		~ControlBuffer() override;
 
-		~BulkEndpoint() override;
-
-		Awaitable<ReadParameters> read(void *data, int &size) override;
-		Awaitable<WriteParameters> write(void const *data, int size) override;
-		using Stream::read;
-		using Stream::write;
+		bool startInternal(int size, Op op) override;
+		void cancel() override;
 
 	protected:
+		UsbDevice_cout &device;
+	};
 
+
+	class BulkEndpoint;
+
+	/**
+		Buffer for transferring data to/from an endpoint
+	*/
+	class BulkBuffer : public LinkedListNode, public LinkedListNode2, public BufferImpl {
+		friend class UsbDevice_cout;
+	public:
+		BulkBuffer(BulkEndpoint &endpoint, int size);
+		~BulkBuffer() override;
+
+		bool startInternal(int size, Op op) override;
+		void cancel() override;
+
+	protected:
+		BulkEndpoint &endpoint;
+	};
+
+	/**
+		BulkEndpoint
+	*/
+	class BulkEndpoint : public LinkedListNode, public coco::Device {
+		friend class UsbDevice_cout;
+		friend class BulkBuffer;
+	public:
+		BulkEndpoint(UsbDevice_cout &device, int index);
+		~BulkEndpoint();
+
+		State state() override;
+		Awaitable<State> untilState(State state) override;
+		int getBufferCount() override;
+		BulkBuffer &getBuffer(int index) override;
+
+	protected:
 		UsbDevice_cout &device;
 		int index;
+
+		// list of buffers
+		LinkedList<BulkBuffer> buffers;
 	};
 
 protected:
-
 	void handle() override;
-
 
 	Loop_native &loop;
 
-	// state
-	State state = State::DISCONNECTED;
-	Waitlist<State> stateWaitlist;
+	// state and coroutines waiting for a state
+	State stat = State::DISABLED;
+	TaskList<State> stateTasks;
 
 	// coroutines waiting for a control request
-	Waitlist<usb::Setup *> requestWaitlist;
+	TaskList<usb::Setup *> requestTasks;
 
 	bool readDescriptor = true;
-	
+
 	// binary/text extracted from the device descriptor
 	bool text;
 
-/*	
-	std::function<void (UsbDevice &, uint8_t)> onSetConfiguration;
+	// list of control buffers
+	LinkedList<ControlBuffer> controlBuffers;
 
-	// endpoints 1 - 7
-	struct Endpoint {
-		Waitlist<ReceiveParameters> receiveWaitlist;
-		Waitlist<SendParameters> sendWaitlist;
-	};
+	// list of bulk endpoints
+	LinkedList<BulkEndpoint> bulkEndpoints;
 
-	Endpoint endpoints[ENDPOINT_COUNT];*/
-	Waitlist<Stream::ReadParameters> readWaitlist;
-	Waitlist<Stream::WriteParameters> writeWaitlist;
+	// list of active transfers
+	LinkedList2<ControlBuffer> controlTransfers;
+	LinkedList2<BulkBuffer> bulkTransfers;
 };
 
 } // namespace coco

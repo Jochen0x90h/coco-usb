@@ -2,11 +2,12 @@
 
 #include <coco/enum.hpp>
 #include <cstdint>
+#include <iterator>
 
 #ifdef _MSC_VER
-#define PACK( __Declaration__ ) __pragma( pack(push, 1) ) __Declaration__ __pragma( pack(pop))
+#define PACK(Declaration) __pragma(pack(push, 1)) Declaration __pragma(pack(pop))
 #else
-#define PACK( __Declaration__ ) __Declaration__ __attribute__((__packed__))
+#define PACK(Declaration) Declaration __attribute__((__packed__))
 #endif
 
 
@@ -96,7 +97,6 @@ struct Setup {
 	uint16_t index;
 	uint16_t length;
 };
-
 
 // device descriptor
 PACK(struct DeviceDescriptor {

@@ -4,11 +4,15 @@
 #include <coco/platform/UsbDevice_cout.hpp>
 
 
+using namespace coco;
+
 // drivers for UsbDeviceTest
 struct Drivers {
-	using UsbDevice = coco::UsbDevice_cout;
-	coco::Loop_native loop;
-	UsbDevice device{loop};
-	UsbDevice::BulkEndpoint endpoint1{device, 1};
-	UsbDevice::BulkEndpoint endpoint2{device, 2};
+	Loop_native loop;
+	UsbDevice_cout device{loop};
+	UsbDevice_cout::ControlBuffer controlBuffer{device, 256};
+	UsbDevice_cout::BulkEndpoint endpoint1{device, 1};
+	UsbDevice_cout::BulkEndpoint endpoint2{device, 2};
+	UsbDevice_cout::BulkBuffer buffer1{endpoint1, 129};
+	UsbDevice_cout::BulkBuffer buffer2{endpoint2, 129};
 };

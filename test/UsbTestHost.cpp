@@ -1,8 +1,7 @@
+#include <coco/BufferWriter.hpp>
 #include <coco/Coroutine.hpp>
-#include <coco/loop.hpp>
 #include <coco/String.hpp>
 #include <coco/StringBuffer.hpp>
-//#include <coco/platform/UsbHost_native.hpp>
 #include <UsbTestHost.hpp>
 #include <iostream>
 #include <iomanip>
@@ -13,7 +12,6 @@
 
 
 using namespace coco;
-//using UsbHost = UsbHost_native;
 
 
 std::ostream &operator <<(std::ostream &s, String v) {
@@ -38,142 +36,23 @@ std::ostream &operator <<(std::ostream &s, hex h) {
 	return s << std::setfill('0') << std::setw(h.w) << std::hex << h.v;
 }
 
-/*
-// https://github.com/libusb/libusb/blob/master/examples/listdevs.c
-static void printDevices(libusb_device **devices) {
-	libusb_device *device;
-	int i = 0, j = 0;
-	uint8_t path[8]; 
-
-	// iterate over devices
-	while ((device = devices[i++]) != nullptr) {
-		libusb_device_descriptor desc;
-		int r = libusb_get_device_descriptor(device, &desc);
-		if (r < 0) {
-			std::cerr << "failed to get device descriptor" << std::endl;
-			return;
-		}
-
-		std::cout << hex(desc.idVendor) << ':' << hex(desc.idProduct)
-			<< " (bus " << dec(libusb_get_bus_number(device)) << ", device " << dec(libusb_get_device_address(device)) << ")";
-
-		r = libusb_get_port_numbers(device, path, sizeof(path));
-		if (r > 0) {
-			std::cout << " path: " << dec(path[0]);
-			for (j = 1; j < r; j++)
-				std::cout << "." << dec(path[j]);
-		}
-		std::cout << std::endl;
-	}
-}
-
-// https://github.com/libusb/libusb/blob/master/examples/testlibusb.c
-static void printDevice(libusb_device *dev, int idVendor = 0, int idProduct = 0) {
-	libusb_device_descriptor desc;
-	libusb_device_handle *handle = NULL;
-	unsigned char string[256];
-	int ret;
-
-	ret = libusb_get_device_descriptor(dev, &desc);
-	if (ret < 0) {
-		std::cerr << "failed to get device descriptor" << std::endl;
-		return;
-	}
-
-	if ((idVendor | idProduct) != 0 && (desc.idVendor != idVendor || desc.idProduct != idProduct))
-		return;
-
-	std::cout << hex(desc.idVendor) << ':' << hex(desc.idProduct) << std::endl;
-	std::cout << "\tBus: " << dec(libusb_get_bus_number(dev)) << std::endl;
-	std::cout << "\tDevice: " << dec(libusb_get_device_address(dev)) << std::endl;
-	ret = libusb_open(dev, &handle);
-	if (LIBUSB_SUCCESS == ret) {
-		std::cout << "\tOpen" << std::endl;
-
-		// manufacturer
-		if (desc.iManufacturer) {
-			ret = libusb_get_string_descriptor_ascii(handle, desc.iManufacturer, string, sizeof(string));
-			if (ret > 0)
-				std::cout << "\t\tManufacturer: " << str(string) << std::endl;
-		}
-
-		// product
-		if (desc.iProduct) {
-			ret = libusb_get_string_descriptor_ascii(handle, desc.iProduct, string, sizeof(string));
-			if (ret > 0)
-				std::cout << "\t\tProduct: " << str(string) << std::endl;
-		}
-		
-	
-		libusb_close(handle);
-	} else {
-		std::cout << "\tOpen error: " << dec(ret) << std::endl;
-	}
-
-	// configurations
-	for (int i = 0; i < desc.bNumConfigurations; i++) {
-		libusb_config_descriptor *config;
-		ret = libusb_get_config_descriptor(dev, i, &config);
-		if (LIBUSB_SUCCESS == ret) {
-			std::cout << "\tConfiguration[" << dec(i) << "]" << std::endl;
-			std::cout << "\t\tTotalLength:         " << dec(config->wTotalLength) << std::endl;
-			std::cout << "\t\tNumInterfaces:       " << dec(config->bNumInterfaces) << std::endl;
-			std::cout << "\t\tConfigurationValue:  " << dec(config->bConfigurationValue) << std::endl;
-			std::cout << "\t\tConfiguration:       " << dec(config->iConfiguration) << std::endl;
-			std::cout << "\t\tAttributes:          " << hex(config->bmAttributes) << std::endl;
-			std::cout << "\t\tMaxPower:            " << dec(config->MaxPower) << std::endl;
-		}
-		
-		// interfaces
-		for (int j = 0; j < config->bNumInterfaces; j++) {
-			libusb_interface const & interface = config->interface[j];
-			
-			// alternate settings
-			for (int k = 0; k < interface.num_altsetting; k++) {
-				libusb_interface_descriptor const & descriptor = interface.altsetting[k];
-
-				std::cout << "\t\tInterface[" << dec(j) << "][" << dec(k) << "]" << std::endl;
-				//std::cout << "\t\t\tInterfaceNumber:   %d\n" << dec(descriptor.bInterfaceNumber) << std::endl;
-				//std::cout << "\t\t\tAlternateSetting:  %d\n" << dec(descriptor.bAlternateSetting) << std::endl;
-				std::cout << "\t\t\tNumEndpoints:      " << dec(descriptor.bNumEndpoints) << std::endl;
-				std::cout << "\t\t\tInterfaceClass:    " << dec(descriptor.bInterfaceClass) << std::endl;
-				std::cout << "\t\t\tInterfaceSubClass: " << dec(descriptor.bInterfaceSubClass) << std::endl;
-				std::cout << "\t\t\tInterfaceProtocol: " << dec(descriptor.bInterfaceProtocol) << std::endl;
-				std::cout << "\t\t\tInterface:         " << dec(descriptor.iInterface) << std::endl;
-
-				// endpoints
-				for (int l = 0; l < descriptor.bNumEndpoints; l++) {
-					libusb_endpoint_descriptor const & endpoint = descriptor.endpoint[l];
-					
-					std::cout << "\t\t\tEndpoint[" << dec(l) << "]" << std::endl;
-					std::cout << "\t\t\t\tEndpointAddress: " << hex(endpoint.bEndpointAddress) << std::endl;
-					std::cout << "\t\t\t\tAttributes:      " << hex(endpoint.bmAttributes) << std::endl;
-					std::cout << "\t\t\t\tMaxPacketSize:   " << dec(endpoint.wMaxPacketSize) << std::endl;
-					std::cout << "\t\t\t\tInterval:        " << dec(endpoint.bInterval) << std::endl;
-					std::cout << "\t\t\t\tRefresh:         " << dec(endpoint.bRefresh) << std::endl;
-					std::cout << "\t\t\t\tSynchAddress:    " << dec(endpoint.bSynchAddress) << std::endl;
-				}
-			}
-		
-		}
-		
-		libusb_free_config_descriptor(config);
-	}
-}
-*/
 
 // vendor specific control request
 enum class Request : uint8_t {
 	RED = 0,
 	GREEN = 1,
 	BLUE = 2,
-	GET_INFO = 3
+	INFO = 3
 };
 
-inline Awaitable<UsbHostDevice::ControlParameters> controlOut(UsbHostDevice &device, Request request,
-	uint16_t wValue, uint16_t wIndex)
-{
-	return device.controlTransfer({usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex}, nullptr, 0);
+inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_t wIndex) {
+	buffer.setHeader<usb::Setup>({usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 0});
+	return buffer.write(0);
+}
+
+inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_t wIndex, int32_t data) {
+	buffer.setHeader<usb::Setup>({usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 4});
+	return buffer.writeValue(data);
 }
 
 
@@ -188,54 +67,54 @@ void printStatus(int endpoint, String message, bool ok) {
 	std::cout << std::endl;
 }
 
-Coroutine handler(Loop &loop, UsbHostDevice &device, Stream &stream, int endpoint) {
-	StringBuffer<128> buffer;
+// test echo coroutine in device
+Coroutine echoTest(Loop &loop, Buffer &control, Buffer &buffer, int endpoint) {
+	int transferred;
 
 	while (true) {
-		// wait until device is connected
-		std::cout << "wait for device to be connected" << std::endl;
-		co_await device.targetState(UsbHostDevice::State::CONNECTED);
-
 		// test control request
+		co_await control.acquire();
 		if (endpoint == 1) {
-			co_await controlOut(device, Request::RED, 1, 0); // set on if wValue != 0
-			co_await controlOut(device, Request::RED, 0, 0);
-			co_await controlOut(device, Request::GREEN, 0, 1); // set on if wIndex != 0
-			co_await controlOut(device, Request::GREEN, 0, 0);
-			co_await controlOut(device, Request::BLUE, 5, 5); // set on if wValue == wIndex
-			co_await controlOut(device, Request::BLUE, 0, 256);
+			for (int i = 1; i <= 8; ++i)
+				co_await controlOut(control, Request::INFO, 0, 256, i);
+			co_await controlOut(control, Request::RED, 1, 0); // set on if wValue != 0
+			co_await controlOut(control, Request::RED, 0, 0);
+			co_await controlOut(control, Request::GREEN, 0, 1); // set on if wIndex != 0
+			co_await controlOut(control, Request::GREEN, 0, 0);
+			co_await controlOut(control, Request::BLUE, 5, 5); // set on if wValue == wIndex
+			co_await controlOut(control, Request::BLUE, 0, 256);
 		}
 
 		// flush out data from last run
 		for (int i = 0; i < 4; ++i) {
-			int r = co_await select(stream.read(buffer), loop.sleep(100ms));
+			co_await buffer.acquire();
+			int r = co_await select(buffer.read(), loop.sleep(100ms));
 			std::cout << i << ' ' << r << std::endl;
+			if (r == 2)
+				break;
 		}
 
 		// echo loop: send data to device and check if we get back the same data
-		int sendLength = 128;
+		int sendLength = 4;//128;
 		bool allOk = true;
-		while (device.isConnected()) {
-
+		co_await buffer.acquire();
+		while (buffer.ready()) {
 			// send to device
-			buffer.resize(sendLength);
 			for (int i = 0; i < sendLength; ++i) {
 				buffer[i] = sendLength + i;
 			}
-			co_await stream.write(buffer);
-			printStatus(endpoint, "send", buffer.size() == sendLength);
-			allOk &= buffer.size() == sendLength;
+			co_await buffer.write(sendLength);
 
 			// receive from device (we get back the same data that we sent)
-			// note: usb driver does not wait for the zero length packet if device sends 128 bytes, therefore use 129 instead of 128
-			co_await stream.read(buffer);
-			printStatus(endpoint, "receive", buffer.size() == sendLength);
-			allOk &= buffer.size() == sendLength;
+			co_await buffer.read();
+			transferred = buffer.transferred();
+			printStatus(endpoint, "receive", transferred == sendLength);
+			allOk &= transferred == sendLength;
 
 			// check received data
 			bool ok = true;
-			for (int i = 0; i < buffer.size(); ++i) {
-				if (buffer[i] != char(buffer.size() + i))
+			for (int i = 0; i < sendLength; ++i) {
+				if (buffer[i] != uint8_t(sendLength + i))
 					ok = false;
 			}
 			printStatus(endpoint, "data", ok);
@@ -247,7 +126,25 @@ Coroutine handler(Loop &loop, UsbHostDevice &device, Stream &stream, int endpoin
 			co_await loop.sleep(100ms);
 
 			// modify the send length
-			sendLength = (sendLength + 5) % 129;
+			//sendLength = (sendLength + 5) % 129;
+		}
+	}
+}
+
+// test write coroutine in device
+Coroutine readTest(Loop &loop, UsbHostDevice &device, Buffer &buffer) {
+	int transferred;
+
+	while (true) {
+		// wait until device is connected
+		std::cout << "wait for device to be connected" << std::endl;
+		co_await buffer.untilReady();
+
+		while (buffer.ready()) {
+			std::cout << "wait for read" << std::endl;
+			co_await buffer.read();
+
+			std::cout << buffer.transferred() << std::endl;
 		}
 	}
 }
@@ -255,8 +152,10 @@ Coroutine handler(Loop &loop, UsbHostDevice &device, Stream &stream, int endpoin
 int main() {
 	Drivers drivers;
 
-	handler(drivers.loop, drivers.device, drivers.endpoint1, 1);
-	handler(drivers.loop, drivers.device, drivers.endpoint2, 2);
+	echoTest(drivers.loop, drivers.controlBuffer, drivers.buffer1, 1);
+	echoTest(drivers.loop, drivers.controlBuffer, drivers.buffer2, 2);
+
+	//readTest(drivers.loop, drivers.device, drivers.endpoint1);
 
 	drivers.loop.run();
 
