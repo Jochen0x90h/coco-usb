@@ -96,12 +96,26 @@ enum class Request : uint8_t {
 	RED = 0,
 	GREEN = 1,
 	BLUE = 2,
-	GET_INFO = 3
+	INFO = 3
 };
 
 
+// helpers
+
+/*
+template <typename T>
+[[nodiscard]] Awaitable<Buffer::State> controlIn(Buffer &buffer, usb::Setup const &setup, const T &data) {
+	int size = std::min(int(setup.length), int(sizeof(data)));
+
+	auto d = reinterpret_cast<const uint8_t *>(&data);
+	std::copy(d, d + size, buffer.data());
+
+	return buffer.write(size);
+}*/
+
+
 // handle control requests
-Coroutine control(UsbDevice &device) {
+Coroutine control(UsbDevice &device, Buffer &buffer) {
 	while (true) {
 		usb::Setup setup;
 
@@ -118,21 +132,22 @@ Coroutine control(UsbDevice &device) {
 					//int descriptorIndex = setup.value & 0xff;
 					switch (descriptorType) {
 					case usb::DescriptorType::DEVICE:
-						//debug::set(debug::CYAN);
-						co_await device.controlIn(setup, &deviceDescriptor);
+						debug::set(debug::CYAN);
+						co_await UsbDevice::controlIn(buffer, setup, deviceDescriptor);
 						break;
 					case usb::DescriptorType::CONFIGURATION:
-						co_await device.controlIn(setup, &configurationDescriptor);
+						debug::set(debug::MAGENTA);
+						co_await UsbDevice::controlIn(buffer, setup, configurationDescriptor);
 						break;
 					//case usb::DescriptorType::STRING:
 					default:
 						device.stall();
 					}
 				}
-				break;	
+				break;
 			default:
 				device.stall();
-			}			
+			}
 			break;
 		case usb::RequestType::VENDOR_DEVICE_OUT:
 			switch (Request(setup.request)) {
@@ -148,17 +163,30 @@ Coroutine control(UsbDevice &device) {
 				device.acknowledge();
 				debug::setBlue(setup.value == setup.index);
 				break;
-			case Request::GET_INFO:
+			case Request::INFO:
+				{
+					// read uint32 and set as debug color
+					co_await buffer.read(setup.length);
+					debug::set(buffer.array<uint32_t>()[0]);
+				}
+				break;
+			default:
+				device.stall();
+			}
+			break;
+		case usb::RequestType::VENDOR_DEVICE_IN:
+			switch (Request(setup.request)) {
+			case Request::INFO:
 				{
 					uint32_t value = 0x01020304;
 #ifdef NRF52
 					value = NRF_FICR->INFO.VARIANT; // nrf52840 chip id
 					//value = NRF_UICR->NRFFW[0]; // flash end
 #endif
-					co_await device.controlIn(setup, &value);
+					co_await UsbDevice::controlIn(buffer, setup, value);
 				}
 				break;
-			default:			
+			default:
 				device.stall();
 			}
 			break;
@@ -169,48 +197,49 @@ Coroutine control(UsbDevice &device) {
 }
 
 uint8_t data[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
-Coroutine write(UsbDevice &device, Stream &stream) {
+Coroutine write(Loop &loop, Buffer &buffer) {
 	while (true) {
-
 		// wait until device is connected
-		co_await device.targetState(UsbDevice::State::CONNECTED);
+		co_await buffer.untilReady();
 
-		while (device.isConnected()) {
-			// send data back to host
-			co_await stream.write(data);
+		while (buffer.ready()) {
+			// send data to host
+			co_await buffer.writeArray(data);
+
+			co_await loop.sleep(500ms);
 		}
 	}
 }
 
 // echo data from host
-Coroutine echo(UsbDevice &device, Stream &stream) {
-	Buffer<uint8_t, 128> buffer;
+Coroutine echo(Loop &loop, Buffer &buffer) {
 	while (true) {
 		debug::set(debug::YELLOW);
 
 		// wait until device is connected
-		co_await device.targetState(UsbDevice::State::CONNECTED);
+		co_await buffer.untilReady();
 
-		while (device.isConnected()) {
-			debug::set(debug::BLUE);
+		while (buffer.ready()) {
+			debug::set(debug::MAGENTA);
 
 			// receive data from host
-			co_await stream.read(buffer);
+			co_await buffer.read();
+			int transferred = buffer.transferred();
 
-			// set green led to indicate processing
-			debug::set(debug::MAGENTA);
+			debug::set(debug::GREEN);
 
 			// check received data
 			bool error = false;
-			for (int i = 0; i < buffer.size(); ++i) {
-				if (buffer[i] != buffer.size() + i)
+			for (int i = 0; i < transferred; ++i) {
+				if (buffer[i] != transferred + i)
 					error = true;
 			}
 			if (error)
 				debug::set(debug::RED);
-			
+
 			// send data back to host
-			co_await stream.write(buffer);
+			co_await buffer.write(transferred);
+			//co_await loop.sleep(300ms);
 		}
 	}
 }
@@ -220,13 +249,15 @@ int main() {
 	Drivers drivers;
 
 	// start to receive from usb host
-	control(drivers.device);
+	control(drivers.device, drivers.controlBuffer);
 #ifdef NATIVE
-	write(drivers.device, drivers.endpoint1);
-	write(drivers.device, drivers.endpoint2);
-#else	
-	echo(drivers.device, drivers.endpoint1);
-	echo(drivers.device, drivers.endpoint2);
+	// emulated device: only write to the dummy device
+	write(drivers.loop, drivers.buffer1);
+	write(drivers.loop, drivers.buffer2);
+#else
+	// echo date coming from the host
+	echo(drivers.loop, drivers.buffer1);
+	echo(drivers.loop, drivers.buffer2);
 #endif
 
 	drivers.loop.run();

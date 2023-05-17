@@ -6,4 +6,7 @@ namespace coco {
 UsbHostDevice::~UsbHostDevice() {
 }
 
+//UsbHostDevice::ControlBuffer::~ControlBuffer() {
+//}
+
 } // namespace coco
