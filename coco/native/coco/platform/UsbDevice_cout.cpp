@@ -71,6 +71,9 @@ void UsbDevice_cout::handle() {
 			}
 		}
 
+		buffer.remove2();
+		buffer.setReady(buffer.xferred);
+
 		// handle only one buffer
 		break;
 	}
