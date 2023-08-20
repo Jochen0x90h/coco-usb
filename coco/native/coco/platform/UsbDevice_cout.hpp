@@ -2,6 +2,7 @@
 
 #include <coco/UsbDevice.hpp>
 #include <coco/BufferImpl.hpp>
+#include <coco/BufferDevice.hpp>
 #include <coco/platform/Loop_native.hpp>
 
 
@@ -10,7 +11,7 @@ namespace coco {
 /**
 	Implementation of an USB device that simply writes info about the transfer operations to std::cout
 */
-class UsbDevice_cout : public UsbDevice, public Loop_native::YieldHandler {
+class UsbDevice_cout : public UsbDevice {
 public:
 	/**
 		Constructor
@@ -22,7 +23,7 @@ public:
 
 	State state() override;
 	bool ready() {return this->stat == State::READY;}
-	[[nodiscard]] Awaitable<State> untilState(State state) override;
+	[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
 
 	[[nodiscard]] Awaitable<usb::Setup *> request(usb::Setup &setup) override;
 
@@ -68,7 +69,7 @@ public:
 	/**
 		BulkEndpoint
 	*/
-	class BulkEndpoint : public LinkedListNode, public coco::Device {
+	class BulkEndpoint : public LinkedListNode, public BufferDevice {
 		friend class UsbDevice_cout;
 		friend class BulkBuffer;
 	public:
@@ -76,7 +77,7 @@ public:
 		~BulkEndpoint();
 
 		State state() override;
-		Awaitable<State> untilState(State state) override;
+		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
 		int getBufferCount() override;
 		BulkBuffer &getBuffer(int index) override;
 
@@ -89,16 +90,17 @@ public:
 	};
 
 protected:
-	void handle() override;
+	void handle();// override;
 
 	Loop_native &loop;
+	TimedTask<Callback> callback;
 
 	// state and coroutines waiting for a state
 	State stat = State::DISABLED;
-	TaskList<State> stateTasks;
+	CoroutineTaskList<> stateTasks;
 
 	// coroutines waiting for a control request
-	TaskList<usb::Setup *> requestTasks;
+	CoroutineTaskList<usb::Setup *> requestTasks;
 
 	bool readDescriptor = true;
 

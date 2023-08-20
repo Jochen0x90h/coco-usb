@@ -255,7 +255,7 @@ int main() {
 	write(drivers.loop, drivers.buffer1);
 	write(drivers.loop, drivers.buffer2);
 #else
-	// echo date coming from the host
+	// echo data coming from the host
 	echo(drivers.loop, drivers.buffer1);
 	echo(drivers.loop, drivers.buffer2);
 #endif

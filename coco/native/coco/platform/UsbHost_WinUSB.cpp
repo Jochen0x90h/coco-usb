@@ -9,15 +9,14 @@
 namespace coco {
 
 UsbHost_WinUSB::UsbHost_WinUSB(Loop_Win32 &loop)
-	: loop(loop)
+	: loop(loop), callback(makeCallback<UsbHost_WinUSB, &UsbHost_WinUSB::handle>(this))
 {
-	// regularly scan for devices
-	this->time = loop.now();
-	loop.timeHandlers.add(*this);
+	// regularly scan for usb devices
+	loop.invoke(this->callback);
 }
 
-UsbHost_WinUSB::~UsbHost_WinUSB() {
-}
+//UsbHost_WinUSB::~UsbHost_WinUSB() {
+//}
 /*
 static int parseHex(const char *s) {
 	int value = 0;
@@ -36,7 +35,8 @@ static int parseHex(const char *s) {
 }*/
 
 void UsbHost_WinUSB::handle() {
-	this->time = this->loop.now() + 1s;
+	//this->time = this->loop.now() + 1s;
+	loop.invoke(this->callback, 1s);
 
 	// enumerate devices
 	HDEVINFO deviceInfo = SetupDiGetClassDevsA(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -150,14 +150,14 @@ UsbHost_WinUSB::Device::~Device() {
 	CloseHandle(this->file);
 }
 
-UsbHostDevice::State UsbHost_WinUSB::Device::state() {
+Device::State UsbHost_WinUSB::Device::state() {
 	return this->stat;
 }
 
-Awaitable<UsbHostDevice::State> UsbHost_WinUSB::Device::untilState(Device::State state) {
-	if (this->stat == state)
+Awaitable<> UsbHost_WinUSB::Device::stateChange(int waitFlags) {
+	if ((waitFlags & (1 << int(this->stat))) == 0)
 		return {};
-	return {this->stateTasks, state};
+	return {this->stateTasks};
 }
 
 /*
@@ -233,9 +233,7 @@ void UsbHost_WinUSB::Device::connect(HANDLE file, void *interface) {
 	}
 
 	// resume all coroutines waiting for ready state
-	this->stateTasks.resumeAll([](Device::State state) {
-		return state == Device::State::READY;
-	});
+	this->stateTasks.doAll();
 }
 
 void UsbHost_WinUSB::Device::disconnect() {
@@ -263,19 +261,23 @@ void UsbHost_WinUSB::Device::disconnect() {
 		}
 
 		// resume all coroutines waiting for disabled state
-		this->stateTasks.resumeAll([](Device::State state) {
-			return state == Device::State::DISABLED;
-		});
+		this->stateTasks.doAll();
 	}
 }
 
 void UsbHost_WinUSB::Device::handle(OVERLAPPED *overlapped) {
 	for (auto &buffer : this->controlBuffers) {
-		buffer.handle(overlapped);
+		if (overlapped == &buffer.overlapped) {
+			buffer.handle(overlapped);
+			return;
+		}
 	}
 	for (auto &endpoint : this->bulkEndpoints) {
 		for (auto &buffer : endpoint.buffers) {
-			buffer.handle(overlapped);
+			if (overlapped == &buffer.overlapped[buffer.index]) {
+				buffer.handle(overlapped);
+				return;
+			}
 		}
 	}
 }
@@ -305,7 +307,7 @@ bool UsbHost_WinUSB::ControlBuffer::setHeader(const uint8_t *data, int size) {
 
 bool UsbHost_WinUSB::ControlBuffer::startInternal(int size, Op op) {
 	if (this->stat != State::READY) {
-		assert(false);
+		assert(this->stat != State::BUSY);
 		return false;
 	}
 
@@ -330,31 +332,26 @@ void UsbHost_WinUSB::ControlBuffer::cancel() {
 		auto e = GetLastError();
 		std::cerr << "cancel error " << e << std::endl;
 	}
-
-	// set state and resume all coroutines waiting for cancelled state
-	//setCancelled();
 }
 
 void UsbHost_WinUSB::ControlBuffer::handle(OVERLAPPED *overlapped) {
-	if (overlapped == &this->overlapped) {
-		DWORD transferred;
-		auto result = GetOverlappedResult(this->device.file, overlapped, &transferred, false);
-		if (!result) {
-			auto error = GetLastError();
-			//if (error != ERROR_IO_INCOMPLETE) {
-				// "real" error or cancelled (ERROR_OPERATION_ABORTED): return zero
-				transferred = 0;
-				result = true;
+	DWORD transferred;
+	auto result = GetOverlappedResult(this->device.file, overlapped, &transferred, false);
+	if (!result) {
+		auto error = GetLastError();
+		//if (error != ERROR_IO_INCOMPLETE) {
+			// "real" error or cancelled (ERROR_OPERATION_ABORTED): return zero
+			transferred = 0;
+			result = true;
 
-				// check if the USB device was disconnected
-				if (error == ERROR_GEN_FAILURE)
-					this->device.disconnect();
-			//}
-		}
-		if (result) {
-			// transfer finished
-			setReady(transferred);
-		}
+			// check if the USB device was disconnected
+			if (error == ERROR_GEN_FAILURE)
+				this->device.disconnect();
+		//}
+	}
+	if (result) {
+		// transfer finished
+		setReady(transferred);
 	}
 }
 
@@ -374,7 +371,7 @@ UsbHost_WinUSB::BulkBuffer::~BulkBuffer() {
 
 bool UsbHost_WinUSB::BulkBuffer::startInternal(int size, Op op) {
 	if (this->stat != State::READY) {
-		assert(false);
+		assert(this->stat != State::BUSY);
 		return false;
 	}
 
@@ -384,7 +381,7 @@ bool UsbHost_WinUSB::BulkBuffer::startInternal(int size, Op op) {
 	memset(&this->overlapped[0], 0, sizeof(OVERLAPPED));
 	int index = 0;
 	auto data = this->dat;
-	if ((op & Op::READ) != 0) {
+	if ((op & Op::WRITE) == 0) {
 		// read
 		auto result = WinUsb_ReadPipe(this->endpoint.device.interface, this->endpoint.inAddress, data, size,
 			nullptr, &this->overlapped[0]);
@@ -428,37 +425,32 @@ void UsbHost_WinUSB::BulkBuffer::cancel() {
 			std::cerr << "cancel error " << e << std::endl;
 		}
 	}
-
-	// set state and resume all coroutines waiting for cancelled state
-	//setCancelled();
 }
 
 void UsbHost_WinUSB::BulkBuffer::handle(OVERLAPPED *overlapped) {
-	if (overlapped == &this->overlapped[this->index]) {
-		DWORD transferred;
-		auto result = GetOverlappedResult(this->endpoint.device.file, overlapped, &transferred, false);
-		if (!result) {
-			auto error = GetLastError();
-			//if (error != ERROR_IO_INCOMPLETE) {
-				// "real" error or cancelled (ERROR_OPERATION_ABORTED): return zero size
-				transferred = 0;
-				this->xferred = 0;
-				result = true;
+	DWORD transferred;
+	auto result = GetOverlappedResult(this->endpoint.device.file, overlapped, &transferred, false);
+	if (!result) {
+		auto error = GetLastError();
+		//if (error != ERROR_IO_INCOMPLETE) {
+			// "real" error or cancelled (ERROR_OPERATION_ABORTED): return zero size
+			transferred = 0;
+			this->xferred = 0;
+			result = true;
 
-				// check if the USB device was disconnected
-				if (error == ERROR_GEN_FAILURE)
-					this->endpoint.device.disconnect();
-			//}
-		}
-		if (result) {
-			// transfer finished
-			if (this->index > 0) {
-				// need to wait for completion of the zero packet
-				this->index = 0;
-				this->xferred = transferred;
-			} else {
-				setReady(transferred + this->xferred);
-			}
+			// check if the USB device was disconnected
+			if (error == ERROR_GEN_FAILURE)
+				this->endpoint.device.disconnect();
+		//}
+	}
+	if (result) {
+		// transfer finished
+		if (this->index > 0) {
+			// need to wait for completion of the zero packet
+			this->index = 0;
+			this->xferred = transferred;
+		} else {
+			setReady(transferred + this->xferred);
 		}
 	}
 }
@@ -479,10 +471,10 @@ Device::State UsbHost_WinUSB::BulkEndpoint::state() {
 	return this->device.stat;
 }
 
-Awaitable<Device::State> UsbHost_WinUSB::BulkEndpoint::untilState(State state) {
-	if (this->device.stat == state)
+Awaitable<> UsbHost_WinUSB::BulkEndpoint::stateChange(int waitFlags) {
+	if ((waitFlags & (1 << int(this->device.stat))) == 0)
 		return {};
-	return {this->device.stateTasks, state};
+	return {this->device.stateTasks};
 }
 
 int UsbHost_WinUSB::BulkEndpoint::getBufferCount() {

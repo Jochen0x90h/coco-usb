@@ -1,5 +1,6 @@
 #include "UsbDevice_USBD.hpp"
 #include <coco/debug.hpp>
+#include <coco/platform/nvic.hpp>
 
 
 namespace coco {
@@ -26,10 +27,10 @@ UsbDevice::State UsbDevice_USBD::state() {
 	return this->stat;
 }
 
-Awaitable<UsbDevice::State> UsbDevice_USBD::untilState(State state) {
-	if (this->stat == state)
+Awaitable<> UsbDevice_USBD::stateChange(int waitFlags) {
+	if ((waitFlags & (1 << int(this->stat))) == 0)
 		return {};
-	return {this->stateTasks, state};
+	return {this->stateTasks};
 }
 
 Awaitable<usb::Setup *> UsbDevice_USBD::request(usb::Setup &setup) {
@@ -45,7 +46,7 @@ void UsbDevice_USBD::stall() {
 }
 
 void UsbDevice_USBD::handle() {
-	if (isInterruptPending(USBD_IRQn)) {
+	if (nvic::pending(USBD_IRQn)) {
 		if (NRF_USBD->EVENTS_USBRESET) {
 			// clear pending interrupt flags at peripheral
 			NRF_USBD->EVENTS_USBRESET = 0;
@@ -55,9 +56,7 @@ void UsbDevice_USBD::handle() {
 				this->stat = State::DISABLED;
 
 				// resume all coroutines waiting for disabled state
-				this->stateTasks.resumeAll([](State state) {
-					return state == State::DISABLED;
-				});
+				this->stateTasks.doAll();
 			}
 		}
 		if (NRF_USBD->EVENTS_USBEVENT) {
@@ -144,9 +143,7 @@ void UsbDevice_USBD::handle() {
 				}
 
 				// resume all coroutines waiting for ready state
-				this->stateTasks.resumeAll([](State state) {
-					return state == State::READY;
-				});
+				this->stateTasks.doAll();
 			} else if (requestType == usb::RequestType::STANDARD_INTERFACE_OUT && request == usb::Request::SET_INTERFACE) {
 				// set interface (interface index is in setup.index, alternate setting is in setup.value)
 
@@ -154,7 +151,7 @@ void UsbDevice_USBD::handle() {
 				NRF_USBD->TASKS_EP0STATUS = TRIGGER;
 			} else {
 				// resume first coroutine waiting for a control request
-				this->requestTasks.resumeFirst([requestType, request](usb::Setup *setup) {
+				this->requestTasks.doFirst([requestType, request](usb::Setup *setup) {
 					uint16_t value = (NRF_USBD->WVALUEH << 8) | NRF_USBD->WVALUEL;
 					uint16_t index = (NRF_USBD->WINDEXH << 8) | NRF_USBD->WINDEXL;
 					uint16_t length = (NRF_USBD->WLENGTHH << 8) | NRF_USBD->WLENGTHL;
@@ -279,7 +276,7 @@ void UsbDevice_USBD::handle() {
 		}
 
 		// clear pending interrupt flag at NVIC
-		clearInterrupt(USBD_IRQn);
+		nvic::clear(USBD_IRQn);
 	}
 }
 
@@ -298,7 +295,7 @@ UsbDevice_USBD::ControlBufferBase::~ControlBufferBase() {
 
 bool UsbDevice_USBD::ControlBufferBase::startInternal(int size, Op op) {
 	if (this->stat != State::READY) {
-		assert(false);
+		assert(this->stat != State::BUSY);
 		return false;
 	}
 
@@ -311,7 +308,7 @@ bool UsbDevice_USBD::ControlBufferBase::startInternal(int size, Op op) {
 	this->transferEnd = this->dat + size;
 
 	// start the transfer
-	if ((op & Op::READ) != 0) {
+	if ((op & Op::WRITE) == 0) {
 		// read/OUT
 		this->device.controlTransfers.add(*this);
 
@@ -447,7 +444,7 @@ UsbDevice_USBD::BulkBufferBase::~BulkBufferBase() {
 
 bool UsbDevice_USBD::BulkBufferBase::startInternal(int size, Op op) {
 	if (this->stat != State::READY) {
-		assert(false);
+		assert(this->stat != State::BUSY);
 		return false;
 	}
 
@@ -461,7 +458,7 @@ bool UsbDevice_USBD::BulkBufferBase::startInternal(int size, Op op) {
 
 	// start the transfer
 	auto &device = this->endpoint.device;
-	if ((op & Op::READ) != 0) {
+	if ((op & Op::WRITE) == 0) {
 		// read/OUT
 		int i = this->endpoint.outIndex;
 		device.outTransfers[i - 1].add(*this);
@@ -593,14 +590,14 @@ UsbDevice_USBD::BulkEndpoint::BulkEndpoint(UsbDevice_USBD &device, int inIndex, 
 UsbDevice_USBD::BulkEndpoint::~BulkEndpoint() {
 }
 
-Device::State UsbDevice_USBD::BulkEndpoint::state() {
+BufferDevice::State UsbDevice_USBD::BulkEndpoint::state() {
 	return this->device.stat;
 }
 
-Awaitable<Device::State> UsbDevice_USBD::BulkEndpoint::untilState(State state) {
-	if (this->device.stat == state)
+Awaitable<> UsbDevice_USBD::BulkEndpoint::stateChange(int waitFlags) {
+	if ((waitFlags & (1 << int(this->device.stat))) == 0)
 		return {};
-	return {this->device.stateTasks, state};
+	return {this->device.stateTasks};
 }
 
 int UsbDevice_USBD::BulkEndpoint::getBufferCount() {

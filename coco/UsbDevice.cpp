@@ -3,7 +3,4 @@
 
 namespace coco {
 
-UsbDevice::~UsbDevice() {
-}
-
 } // namespace coco

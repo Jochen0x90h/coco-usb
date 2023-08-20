@@ -11,29 +11,8 @@ namespace coco {
 
 	https://www.beyondlogic.org/usbnutshell/usb1.shtml
 */
-class UsbDevice {
+class UsbDevice : public Device {
 public:
-
-	using State = Device::State;
-
-	virtual ~UsbDevice();
-
-	/**
-		Get the current state of the device
-	*/
-	virtual State state() = 0;
-	bool disabled() {return state() == State::DISABLED;}
-	bool ready() {return state() == State::READY;}
-
-	/**
-		Wait until the device is in the given target state (e.g. co_await device.untilState(UsbDevice::State::READY))
-		@param state target state
-		@return use co_await on return value to await the given state
-	*/
-	[[nodiscard]] virtual Awaitable<State> untilState(State state) = 0;
-	[[nodiscard]] Awaitable<State> untilDisabled() {return untilState(State::DISABLED);}
-	[[nodiscard]] Awaitable<State> untilReady() {return untilState(State::READY);}
-
 	/**
 		Wait for a request from the host
 		@param setup contents of the setup packet where setup.requestType determines the direction
@@ -55,9 +34,9 @@ public:
 		Helper for control in transfers, e.g. sending a descriptor to the host
 	*/
 	template <typename T>
-	[[nodiscard]] static Awaitable<Buffer::State> controlIn(Buffer &buffer, usb::Setup const &setup, const T &data) {
+	[[nodiscard]] static Awaitable<> controlIn(Buffer &buffer, usb::Setup const &setup, const T &data) {
 		int size = std::min(int(setup.length), int(sizeof(data)));
-		return buffer.writeData(reinterpret_cast<const uint8_t *>(&data), size);
+		return buffer.writeData(&data, size);
 	}
 };
 

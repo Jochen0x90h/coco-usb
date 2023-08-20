@@ -1,8 +1,8 @@
 #pragma once
 
 #include <coco/usb.hpp>
-#include <coco/UsbHostDevice.hpp>
 #include <coco/BufferImpl.hpp>
+#include <coco/BufferDevice.hpp>
 #include <coco/platform/Loop_Win32.hpp> // includes Windows.h
 #include <winusb.h>
 #include <string>
@@ -16,12 +16,11 @@ namespace coco {
 	USB host implementation using Win32 and WinUsb
 	https://learn.microsoft.com/en-us/windows/win32/api/winusb/
 */
-class UsbHost_WinUSB : public Loop_Win32::TimeHandler {
+class UsbHost_WinUSB {
 public:
 	UsbHost_WinUSB(Loop_Win32 &loop);
-	~UsbHost_WinUSB() override;
+	//~UsbHost_WinUSB() override;
 
-	void handle() override;
 
 	class Device;
 
@@ -37,7 +36,6 @@ public:
 
 		bool setHeader(const uint8_t *data, int size) override;
 		using BufferImpl::setHeader;
-		//void setSetup(const usb::Setup &setup) override;
 		bool startInternal(int size, Op op) override;
 		void cancel() override;
 
@@ -76,7 +74,7 @@ public:
 	/**
 		Bulk endpoint
 	*/
-	class BulkEndpoint : public LinkedListNode, public coco::Device {
+	class BulkEndpoint : public LinkedListNode, public BufferDevice {
 		friend class UsbHost_WinUSB::Device;
 		friend class BulkBuffer;
 	public:
@@ -85,7 +83,7 @@ public:
 		~BulkEndpoint();
 
 		State state() override;
-		Awaitable<State> untilState(State state) override;
+		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
 		int getBufferCount() override;
 		BulkBuffer &getBuffer(int index) override;
 
@@ -102,7 +100,7 @@ public:
 		USB device as seen by the host. Connects itself to an actual USB device when it is plugged in and the
 		filter on the device descriptor returns true.
 	*/
-	class Device : public UsbHostDevice, public Loop_Win32::CompletionHandler, public LinkedListNode {
+	class Device : public coco::Device, public Loop_Win32::CompletionHandler, public LinkedListNode {
 		friend class UsbHost_WinUSB;
 	public:
 
@@ -117,7 +115,7 @@ public:
 
 		State state() override;
 		bool ready() {return this->stat == State::READY;}
-		[[nodiscard]] Awaitable<State> untilState(State state) override;
+		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
 
 		//void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
 
@@ -139,7 +137,7 @@ public:
 
 		// state
 		State stat = State::DISABLED;
-		TaskList<State> stateTasks;
+		CoroutineTaskList<> stateTasks;
 
 		// buffers for control endpoint
 		LinkedList<ControlBuffer> controlBuffers;
@@ -149,7 +147,10 @@ public:
 	};
 
 protected:
+	void handle();// override;
+
 	Loop_Win32 &loop;
+	TimedTask<Callback> callback;
 	std::map<std::string, Device *> deviceInfos;
 	LinkedList<Device> devices;
 };
