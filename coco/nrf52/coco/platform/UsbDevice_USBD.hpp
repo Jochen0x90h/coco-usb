@@ -2,6 +2,7 @@
 
 #include <coco/UsbDevice.hpp>
 #include <coco/BufferImpl.hpp>
+#include <coco/BufferDevice.hpp>
 #include <coco/platform/platform.hpp>
 #include <coco/platform/Loop_RTC0.hpp>
 
@@ -22,7 +23,7 @@ public:
 
 	State state() override;
 	bool ready() {return this->stat == State::READY;}
-	[[nodiscard]] Awaitable<State> untilState(State state) override;
+	[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
 
 	[[nodiscard]] Awaitable<usb::Setup *> request(usb::Setup &setup) override;
 
@@ -100,7 +101,7 @@ public:
 	/**
 		BulkEndpoint
 	*/
-	class BulkEndpoint : public LinkedListNode, public Device {
+	class BulkEndpoint : public LinkedListNode, public BufferDevice {
 		friend class UsbDevice_USBD;
 		friend class UsbDevice_USBD::BulkBufferBase;
 	public:
@@ -109,7 +110,7 @@ public:
 		~BulkEndpoint();
 
 		State state() override;
-		Awaitable<State> untilState(State state) override;
+		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
 		int getBufferCount() override;
 		BulkBufferBase &getBuffer(int index) override;
 
@@ -140,10 +141,10 @@ protected:
 
 	// state
 	State stat = State::DISABLED;
-	TaskList<State> stateTasks;
+	CoroutineTaskList<> stateTasks;
 
 	// coroutines waiting for a control request
-	TaskList<usb::Setup *> requestTasks;
+	CoroutineTaskList<usb::Setup *> requestTasks;
 
 	// list of control buffers
 	LinkedList<ControlBufferBase> controlBuffers;

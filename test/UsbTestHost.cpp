@@ -67,13 +67,15 @@ void printStatus(int endpoint, String message, bool ok) {
 	std::cout << std::endl;
 }
 
-// test echo coroutine in device
+// test echo coroutine in device (i.e. write to device and check if it returns the same data)
 Coroutine echoTest(Loop &loop, Buffer &control, Buffer &buffer, int endpoint) {
-	int transferred;
 
 	while (true) {
+		// wait until USB device gets detected (control buffer becomes ready)
+		std::cout << "Wait for USB device...";
+		co_await control.untilReady();
+
 		// test control request
-		co_await control.acquire();
 		if (endpoint == 1) {
 			for (int i = 1; i <= 8; ++i)
 				co_await controlOut(control, Request::INFO, 0, 256, i);
@@ -87,17 +89,18 @@ Coroutine echoTest(Loop &loop, Buffer &control, Buffer &buffer, int endpoint) {
 
 		// flush out data from last run
 		for (int i = 0; i < 4; ++i) {
-			co_await buffer.acquire();
 			int r = co_await select(buffer.read(), loop.sleep(100ms));
 			std::cout << i << ' ' << r << std::endl;
-			if (r == 2)
+			if (r == 2) {
+				// timeout: cancel read and wait until ready (or disabled)
+				co_await buffer.acquire();
 				break;
+			}
 		}
 
 		// echo loop: send data to device and check if we get back the same data
 		int sendLength = 4;//128;
 		bool allOk = true;
-		co_await buffer.acquire();
 		while (buffer.ready()) {
 			// send to device
 			for (int i = 0; i < sendLength; ++i) {
@@ -107,7 +110,7 @@ Coroutine echoTest(Loop &loop, Buffer &control, Buffer &buffer, int endpoint) {
 
 			// receive from device (we get back the same data that we sent)
 			co_await buffer.read();
-			transferred = buffer.transferred();
+			int transferred = buffer.transferred();
 			printStatus(endpoint, "receive", transferred == sendLength);
 			allOk &= transferred == sendLength;
 
@@ -131,10 +134,8 @@ Coroutine echoTest(Loop &loop, Buffer &control, Buffer &buffer, int endpoint) {
 	}
 }
 
-// test write coroutine in device
-Coroutine readTest(Loop &loop, UsbHostDevice &device, Buffer &buffer) {
-	int transferred;
-
+// test write coroutine in device (i.e. read from device)
+Coroutine readTest(Loop &loop, Buffer &buffer) {
 	while (true) {
 		// wait until device is connected
 		std::cout << "wait for device to be connected" << std::endl;
@@ -155,7 +156,7 @@ int main() {
 	echoTest(drivers.loop, drivers.controlBuffer, drivers.buffer1, 1);
 	echoTest(drivers.loop, drivers.controlBuffer, drivers.buffer2, 2);
 
-	//readTest(drivers.loop, drivers.device, drivers.endpoint1);
+	//readTest(drivers.loop, drivers.buffer1);
 
 	drivers.loop.run();
 
