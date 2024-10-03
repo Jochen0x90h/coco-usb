@@ -1,7 +1,6 @@
 #pragma once
 
 #include <coco/usb.hpp>
-#include <coco/BufferImpl.hpp>
 #include <coco/BufferDevice.hpp>
 #include <coco/platform/Loop_Win32.hpp> // includes Windows.h
 #include <winusb.h>
@@ -28,64 +27,70 @@ public:
 		Buffer for control transfers
 		Max size is 512 according to spec: https://www.techdesignforums.com/practice/technique/usb-3-0-protocol-layer-2/
 	*/
-	class ControlBuffer : public LinkedListNode, public BufferImpl {
+	class ControlBuffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
 		friend class Device;
 	public:
-		ControlBuffer(Device &device, int size);
+		ControlBuffer(int capacity, Device &device);
 		~ControlBuffer() override;
 
-		bool setHeader(const uint8_t *data, int size) override;
-		using BufferImpl::setHeader;
-		bool startInternal(int size, Op op) override;
-		void cancel() override;
+		// Buffer methods
+		bool start(Op op) override;
+		bool cancel() override;
 
 	protected:
+		void start();
 		void handle(OVERLAPPED *overlapped);
 
 		Device &device;
-		WINUSB_SETUP_PACKET setup;
 		OVERLAPPED overlapped;
 	};
 
 
-	class BulkEndpoint;
+	class Endpoint;
 
 	/**
 		Buffer for transferring data to/from an endpoint
 	*/
-	class BulkBuffer : public LinkedListNode, public BufferImpl {
+	class Buffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
 		friend class UsbHost_WinUSB::Device;
 	public:
-		BulkBuffer(BulkEndpoint &endpoint, int size);
-		~BulkBuffer() override;
+		Buffer(int capacity, Endpoint &endpoint);
+		~Buffer() override;
 
-		bool startInternal(int size, Op op) override;
-		void cancel() override;
+		// Buffer methods
+		bool start(Op op) override;
+		bool cancel() override;
 
 	protected:
+		void start();
 		void handle(OVERLAPPED *overlapped);
 
-		BulkEndpoint &endpoint;
+		Endpoint &endpoint;
 
+		Op op;
 		OVERLAPPED overlapped[2];
 		int index;
 	};
 
 	/**
-		Bulk endpoint
-	*/
-	class BulkEndpoint : public LinkedListNode, public BufferDevice {
+	 * Bulk/Interrupt endpoint
+	 */
+	class Endpoint : public BufferDevice, public IntrusiveListNode {
 		friend class UsbHost_WinUSB::Device;
-		friend class BulkBuffer;
+		friend class Buffer;
 	public:
-		BulkEndpoint(UsbHost_WinUSB::Device &device, int inAddress, int outAddress);
-		BulkEndpoint(UsbHost_WinUSB::Device &device, int address) : BulkEndpoint(device,  usb::IN | address, usb::OUT | address) {}
-		~BulkEndpoint();
+		Endpoint(UsbHost_WinUSB::Device &device, int inAddress, int outAddress);
+		Endpoint(UsbHost_WinUSB::Device &device, int address) : Endpoint(device,  usb::IN | address, usb::OUT | address) {}
+		~Endpoint();
 
-		State state() override;
-		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
+		// Device methods
+		//StateTasks<const State, Events> &getStateTasks() override;
+		//State state() override;
+		//[[nodiscard]] Awaitable<Condition> until(Condition condition) override;
+
+		// BufferDevice methods
 		int getBufferCount() override;
-		BulkBuffer &getBuffer(int index) override;
+		Buffer &getBuffer(int index) override;
 
 	protected:
 		UsbHost_WinUSB::Device &device;
@@ -93,14 +98,14 @@ public:
 		int outAddress;
 
 		// list of buffers
-		LinkedList<BulkBuffer> buffers;
+		IntrusiveList<Buffer> buffers;
 	};
 
 	/**
 		USB device as seen by the host. Connects itself to an actual USB device when it is plugged in and the
 		filter on the device descriptor returns true.
 	*/
-	class Device : public coco::Device, public Loop_Win32::CompletionHandler, public LinkedListNode {
+	class Device : public coco::Device, public Loop_Win32::CompletionHandler, public IntrusiveListNode {
 		friend class UsbHost_WinUSB;
 	public:
 
@@ -113,9 +118,11 @@ public:
 
 		~Device() override;
 
-		State state() override;
-		bool ready() {return this->stat == State::READY;}
-		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
+		// Device methods
+		//StateTasks<const State, Events> &getStateTasks() override;
+		//State state() override;
+		//bool ready() {return this->stat == State::READY;}
+		//[[nodiscard]] Awaitable<Condition> until(Condition condition) override;
 
 		//void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
 
@@ -136,23 +143,28 @@ public:
 		WINUSB_INTERFACE_HANDLE interface = nullptr;
 
 		// state
-		State stat = State::DISABLED;
-		CoroutineTaskList<> stateTasks;
+		//State stat = State::OPENING;//DISABLED;
+		//CoroutineTaskList<Condition> stateTasks;
+		//StateTasks<State, Events> st = State::OPENING;
 
-		// buffers for control endpoint
-		LinkedList<ControlBuffer> controlBuffers;
+		// list of all buffers for control endpoint
+		IntrusiveList<ControlBuffer> controlBuffers;
 
-		// bulk endpoints
-		LinkedList<BulkEndpoint> bulkEndpoints;
+		// list of all bulk/interrupt endpoints
+		IntrusiveList<Endpoint> endpoints;
+
+		// pending transfers (needed to queue transfers when device is in OPENING or PAUSE state)
+		IntrusiveList2<ControlBuffer> controlTransfers;
+		IntrusiveList2<Buffer> transfers;
 	};
 
 protected:
-	void handle();// override;
+	void handle();
 
 	Loop_Win32 &loop;
 	TimedTask<Callback> callback;
 	std::map<std::string, Device *> deviceInfos;
-	LinkedList<Device> devices;
+	IntrusiveList<Device> devices;
 };
 
 } // namespace coco

@@ -1,72 +1,51 @@
-# hex generator
-separate_arguments(GENERATE_HEX)
-macro(generate_hex TARGET)
-	if(NOT "${GENERATE_HEX}" STREQUAL "" AND NOT "${GENERATE_HEX}" STREQUAL "None")
-		#message("*** Generate Hex for ${TARGET}: ${GENERATE_HEX}")
-		add_custom_command(TARGET ${TARGET}
-			POST_BUILD
-			COMMAND ${GENERATE_HEX} ${TARGET} ${TARGET}.hex
-		)
-	endif()
-endmacro()
-
-# iterate over boards and generate tests
-foreach(COMPONENT ${coco-devboards_COMPONENT_NAMES})
-	string(REGEX REPLACE ".*\\:" "" BOARD ${COMPONENT})
-	message("*** Board: ${BOARD}")
-	
-	# check if board specific header exists
-	if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${BOARD}/UsbDeviceTest.hpp)
-		set(NAME "UsbDeviceTest-${BOARD}")
+# Generate a test for a board
+# TEST the test application, implemented in ${TEST}.cpp
+# BOARD_LIB a library for a board containing SystemInit() and a linker script for embedded platforms
+function(board_test TEST BOARD_LIB)
+	# check if board library exists for the current platform
+	if(TARGET ${BOARD_LIB})
+		string(REGEX REPLACE ".*\\:" "" BOARD ${BOARD_LIB})
+		set(NAME "${TEST}-${BOARD}")
+		message("*** Board: ${BOARD}")
 
 		add_executable(${NAME}
-			UsbDeviceTest.cpp
+			${TEST}.cpp
 		)
 		target_include_directories(${NAME}
 			PRIVATE
 				../
 				${BOARD}
 		)
-
-		# find link.ld of board
-		get_target_property(INCLUDES ${COMPONENT} INTERFACE_INCLUDE_DIRECTORIES)
-		target_link_directories(${NAME}
-			PRIVATE	
-				${INCLUDES}
-		)
-
 		target_link_libraries(${NAME}
-			${COMPONENT}
-			coco::coco
-			coco-loop::coco-loop
+			${BOARD_LIB}
 			${PROJECT_NAME}
 		)
 
-		# generate hex file for flashing the target
-		generate_hex(${NAME})
-	endif()
-	
-	# check if board specific header exists
-	if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${BOARD}/UsbTestHost.hpp)
-		# Host program for USB device test: Run on host computer while USB device is connected
-		set(NAME "UsbTestHost-${BOARD}")
-
-		add_executable(${NAME}
-			UsbTestHost.cpp
-		)
-		target_include_directories(${NAME}
-			PRIVATE
-				../
-				${BOARD}
-		)
-		target_link_libraries(${NAME}
-			coco::coco
-			coco-loop::coco-loop
-			coco-usb
-		)
 		# windows specific libraries
 		if(WIN32)
 			target_link_libraries(${NAME} SetupAPI Winusb)
 		endif()
+
+		# generate hex file for flashing the target
+		if(${CMAKE_CROSSCOMPILING})
+			#message("*** Generate Hex for ${NAME} using ${CMAKE_OBJCOPY}")
+			add_custom_command(TARGET ${NAME}
+				POST_BUILD
+				COMMAND ${CMAKE_OBJCOPY} -O ihex ${NAME} ${NAME}.hex
+			)
+		endif()
 	endif()
-endforeach()
+endfunction()
+
+
+board_test(UsbDeviceTest coco-devboards::native)
+board_test(UsbDeviceTest coco-devboards::nrf52dongle)
+board_test(UsbDeviceTest coco-devboards::stm32g431nucleo) # with X-NUCLEO-SNK1M1 expansion board
+board_test(UsbDeviceTest coco-devboards::stm32g474nucleo) # with X-NUCLEO-SNK1M1 expansion board
+board_test(UsbDeviceTest coco-devboards::canable02)
+board_test(UsbDeviceTest limes2)
+
+board_test(UsbTestHost coco-devboards::native)
+
+board_test(UsbSerialTest coco-devboards::nrf52dongle)
+board_test(UsbSerialTest coco-devboards::stm32g431nucleo) # with X-NUCLEO-SNK1M1 expansion board
