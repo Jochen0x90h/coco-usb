@@ -1,3 +1,4 @@
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 add_library(${PROJECT_NAME})
 target_sources(${PROJECT_NAME}
 	PUBLIC FILE_SET headers TYPE HEADERS FILES
@@ -32,14 +33,19 @@ elseif(${PLATFORM} MATCHES "^nrf52")
 		PRIVATE
 			nrf52/coco/platform/UsbDevice_USBD.cpp
 	)
-elseif(${PLATFORM} MATCHES "^stm32f0")
-
+elseif(${PLATFORM} MATCHES "^stm32")
+	target_sources(${PROJECT_NAME}
+		PUBLIC FILE_SET platform_headers TYPE HEADERS BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/stm32 FILES
+			stm32/coco/platform/UsbDevice_USB.hpp
+		PRIVATE
+			stm32/coco/platform/UsbDevice_USB.cpp
+	)
 endif()
 
 target_link_libraries(${PROJECT_NAME}
 	coco::coco
 	coco-loop::coco-loop
-	coco-buffer::coco-buffer
+	coco-device::coco-device
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -51,6 +57,4 @@ target_include_directories(${PROJECT_NAME}
 install(TARGETS ${PROJECT_NAME}
 	FILE_SET headers DESTINATION include/coco
 	FILE_SET platform_headers DESTINATION include
-	LIBRARY DESTINATION lib
-	ARCHIVE DESTINATION lib
 )

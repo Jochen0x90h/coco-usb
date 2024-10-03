@@ -9,10 +9,20 @@ using namespace coco;
 // drivers for UsbDeviceTest
 struct Drivers {
 	Loop_RTC0 loop;
-	UsbDevice_USBD device{loop};
-	UsbDevice_USBD::ControlBuffer<256> controlBuffer{device};
-	UsbDevice_USBD::BulkEndpoint endpoint1{device, 1};
-	UsbDevice_USBD::BulkEndpoint endpoint2{device, 2};
-	UsbDevice_USBD::BulkBuffer<129> buffer1{endpoint1};
-	UsbDevice_USBD::BulkBuffer<129> buffer2{endpoint2};
+
+	using Usb = UsbDevice_USBD;
+	Usb usb{loop};
+	Usb::ControlBuffer<256> controlBuffer{usb};
+	Usb::Endpoint endpoint1{usb, 1};
+	Usb::Endpoint endpoint2{usb, 2};
+	Usb::Buffer<129> buffer1{endpoint1};
+	Usb::Buffer<129> buffer2{endpoint2};
 };
+
+Drivers drivers;
+
+extern "C" {
+void USBD_IRQHandler() {
+	drivers.usb.USBD_IRQHandler();
+}
+}

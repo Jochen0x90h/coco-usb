@@ -1,64 +1,73 @@
 #pragma once
 
 #include <coco/UsbDevice.hpp>
-#include <coco/BufferImpl.hpp>
 #include <coco/BufferDevice.hpp>
+#include <coco/platform/Loop_Queue.hpp>
 #include <coco/platform/platform.hpp>
-#include <coco/platform/Loop_RTC0.hpp>
+#include <coco/platform/nvic.hpp>
 
 
 namespace coco {
 
 /**
-	Implementation of USB device for nRF52 using USBD peripheral
-	https://infocenter.nordicsemi.com/index.jsp?topic=%2Fps_nrf52840%2Fusbd.html&cp=5_0_0_5_34
-
-	Resources:
-	NRF_USBD
-*/
-class UsbDevice_USBD : public UsbDevice, public Loop_RTC0::Handler {
+ * Implementation of USB device for nRF52 using USBD peripheral
+ * https://infocenter.nordicsemi.com/index.jsp?topic=%2Fps_nrf52840%2Fusbd.html&cp=5_0_0_5_34
+ *
+ * Resources:
+ * NRF_USBD
+ */
+class UsbDevice_USBD : public UsbDevice, public Loop_Queue::Handler {
 public:
-	UsbDevice_USBD(Loop_RTC0 &loop);
+	/**
+	 * Constructor
+	 * @param loop event loop
+	 */
+	UsbDevice_USBD(Loop_Queue &loop);
 	~UsbDevice_USBD() override;
 
-	State state() override;
-	bool ready() {return this->stat == State::READY;}
-	[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
+	// Device methods
+	//StateTasks<const State, Events> &getStateTasks() override;
+	//State state() override;
+	//bool ready() {return this->stat == State::READY;}
+	//[[nodiscard]] Awaitable<Condition> until(Condition condition) override;
 
-	[[nodiscard]] Awaitable<usb::Setup *> request(usb::Setup &setup) override;
-
+	// UsbDevice methods
+	//[[nodiscard]] Awaitable<usb::Setup *> request(usb::Setup &setup) override;
+	usb::Setup getSetup() override;
 	void acknowledge() override;
 	void stall() override;
 
 
-	class ControlBufferBase : public LinkedListNode, public LinkedListNode2, public BufferImpl {
+	// internal control buffer base class, derives from IntrusiveListNode for the list of buffers and Loop_Queue::Handler to be notified from the event loop
+	class ControlBufferBase : public Buffer, public IntrusiveListNode, public Loop_Queue::Handler {
 		friend class UsbDevice_USBD;
 	public:
 		static constexpr int BUFFER_SIZE = 64;
 
-		ControlBufferBase(uint8_t *data, int size, UsbDevice_USBD &device);
+		ControlBufferBase(uint8_t *data, int capacity, UsbDevice_USBD &device);
 		~ControlBufferBase() override;
 
-		bool startInternal(int size, Op op) override;
-		void cancel() override;
+		// Buffer methods
+		bool start(Op op) override;
+		bool cancel() override;
 
 	protected:
-		void finishRead();
+		bool finishRead();
 		void startWrite();
-		void finishWrite();
+		bool finishWrite();
+		void handle() override;
 
 		UsbDevice_USBD &device;
 
+		Op op;
 		uint8_t *transferIt;
 		uint8_t *transferEnd;
-		bool partial;
-		bool writing;
 	};
 
 	/**
-		Buffer for control transfers
-		@tparam N size of buffer
-	*/
+	 * Buffer for control transfers
+	 * @tparam N size of buffer
+	 */
 	template <int N>
 	class ControlBuffer : public ControlBufferBase {
 	public:
@@ -69,50 +78,54 @@ public:
 	};
 
 
-	class BulkEndpoint;
+	class Endpoint;
 
-	class BulkBufferBase : public LinkedListNode, public LinkedListNode2, public BufferImpl {
+	// internal bulk buffer base class, derives from IntrusiveListNode for the list of buffers and Loop_Queue::Handler to be notified from the event loop
+	class BufferBase : public Buffer, public IntrusiveListNode, public Loop_Queue::Handler {
 		friend class UsbDevice_USBD;
 	public:
 		static constexpr int BUFFER_SIZE = 64;
 
-		BulkBufferBase(uint8_t *data, int size, BulkEndpoint &endpoint);
-		~BulkBufferBase() override;
+		BufferBase(uint8_t *data, int capacity, Endpoint &endpoint);
+		~BufferBase() override;
 
-		bool startInternal(int size, Op op) override;
-		void cancel() override;
+		// Buffer methods
+		bool start(Op op) override;
+		bool cancel() override;
 
 	protected:
-		void finishRead();
+		bool finishRead();
 		void startWrite();
-
-		// finish write operation, return false if more packets need to be transferred
 		bool finishWrite();
+		void handle() override;
 
 
-		BulkEndpoint &endpoint;
+		Endpoint &endpoint;
 
+		Op op;
 		uint8_t *transferIt;
 		uint8_t *transferEnd;
-		bool partial;
-		bool writing;
 	};
 
 	/**
-		BulkEndpoint
-	*/
-	class BulkEndpoint : public LinkedListNode, public BufferDevice {
+	 * Bulk/Interrupt Endpoint
+	 */
+	class Endpoint : public BufferDevice, public IntrusiveListNode {
 		friend class UsbDevice_USBD;
-		friend class UsbDevice_USBD::BulkBufferBase;
+		friend class UsbDevice_USBD::BufferBase;
 	public:
-		BulkEndpoint(UsbDevice_USBD &device, int inIndex, int outIndex);
-		BulkEndpoint(UsbDevice_USBD &device, int index) : BulkEndpoint(device, index, index) {}
-		~BulkEndpoint();
+		Endpoint(UsbDevice_USBD &device, int inIndex, int outIndex);
+		Endpoint(UsbDevice_USBD &device, int index) : Endpoint(device, index, index) {}
+		~Endpoint() override;
 
-		State state() override;
-		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
+		// Device methods
+		//StateTasks<const State, Events> &getStateTasks() override;
+		//State state() override;
+		//[[nodiscard]] Awaitable<Condition> until(Condition condition) override;
+
+		// BufferDevice methods
 		int getBufferCount() override;
-		BulkBufferBase &getBuffer(int index) override;
+		BufferBase &getBuffer(int index) override;
 
 	protected:
 		UsbDevice_USBD &device;
@@ -120,48 +133,65 @@ public:
 		int outIndex;
 
 		// list of buffers
-		LinkedList<BulkBufferBase> buffers;
+		IntrusiveList<BufferBase> buffers;
 	};
 
 	/**
-		Buffer for bulk transfers on an endpoint
-		@tparam N size of buffer
-	*/
+	 * Buffer for bulk transfers on an endpoint
+	 * @tparam N size of buffer
+	 */
 	template <int N>
-	class BulkBuffer : public BulkBufferBase {
+	class Buffer : public BufferBase {
 	public:
-		BulkBuffer(BulkEndpoint &endpoint) : BulkBufferBase(buffer, N, endpoint) {}
+		Buffer(Endpoint &endpoint) : BufferBase(buffer, N, endpoint) {}
 
 	protected:
 		alignas(4) uint8_t buffer[N];
 	};
 
+	/**
+		USB interrupt handler, needs to be called from USBD_IRQHandler() (check in startup code in coco if interrupt handler exists!)
+	*/
+	void USBD_IRQHandler();
 protected:
 	void handle() override;
 
-	// state
-	State stat = State::DISABLED;
-	CoroutineTaskList<> stateTasks;
+	Loop_Queue &loop;
 
-	// coroutines waiting for a control request
-	CoroutineTaskList<usb::Setup *> requestTasks;
+	// state
+	//StateTasks<State, Events> st = State::OPENING;
+	std::atomic<State> stat = State::OPENING; // device is in opening state until it gets configured by the host
+	//CoroutineTaskList<Condition> stateTasks;
+
+	// events
+	std::atomic<Events> events = Events::NONE;
 
 	// list of control buffers
-	LinkedList<ControlBufferBase> controlBuffers;
+	IntrusiveList<ControlBufferBase> controlBuffers;
+
+	// control transfer mode
+	enum class Mode : uint8_t {
+		IDLE,
+
+		// data stage of control transfer
+		DATA_IN,
+		DATA_OUT,
+	};
+	Mode controlMode = Mode::IDLE;
 
 	// active control transfers
-	LinkedList2<ControlBufferBase> controlTransfers;
+	InterruptQueue<ControlBufferBase> controlTransfers;
 
-	// list of bulk endpoints
-	LinkedList<BulkEndpoint> bulkEndpoints;
+	// list of bulk/interrupt endpoints
+	IntrusiveList<Endpoint> endpoints;
 
-	// status flags
-	int inBusy = 0; // flags: 0x1 << index
-	int outAvailable = 0; // flags: 0x10000 << index
-
-	// for each endpont a list of active in and out transfers
-	LinkedList2<BulkBufferBase> inTransfers[7];
-	LinkedList2<BulkBufferBase> outTransfers[7];
+	// for each endpont a queue of active in and out transfers
+	struct Transfer {
+		InterruptQueue<BufferBase> in;
+		bool outAvailable;
+		InterruptQueue<BufferBase> out;
+	};
+	Transfer bulkTransfers[7];
 };
 
 } // namespace coco
