@@ -1,7 +1,6 @@
 #pragma once
 
 #include <coco/UsbDevice.hpp>
-#include <coco/BufferImpl.hpp>
 #include <coco/BufferDevice.hpp>
 #include <coco/platform/Loop_native.hpp>
 
@@ -21,12 +20,14 @@ public:
 	*/
 	UsbDevice_cout(Loop_native &loop);
 
-	State state() override;
-	bool ready() {return this->stat == State::READY;}
-	[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
+	// Device methods
+	//StateTasks<const State, Events> &getStateTasks() override;
+	//State state() override;
+	//bool ready() {return this->stat == State::READY;}
+	//[[nodiscard]] Awaitable<Condition> until(Condition condition) override;
 
-	[[nodiscard]] Awaitable<usb::Setup *> request(usb::Setup &setup) override;
-
+	// UsbDevice methods
+	usb::Setup getSetup() override;
 	void acknowledge() override;
 	void stall() override;
 
@@ -34,73 +35,77 @@ public:
 	/**
 		Buffer for control transfers
 	*/
-	class ControlBuffer : public LinkedListNode, public LinkedListNode2, public BufferImpl {
+	class ControlBuffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
 		friend class UsbDevice_cout;
 	public:
-		ControlBuffer(UsbDevice_cout &device, int size);
+		ControlBuffer(int capacity, UsbDevice_cout &device);
 		~ControlBuffer() override;
 
-		bool startInternal(int size, Op op) override;
-		void cancel() override;
+		// Buffer methods
+		bool start(Op op) override;
+		bool cancel() override;
 
 	protected:
 		UsbDevice_cout &device;
 	};
 
 
-	class BulkEndpoint;
+	class Endpoint;
 
 	/**
-		Buffer for transferring data to/from an endpoint
-	*/
-	class BulkBuffer : public LinkedListNode, public LinkedListNode2, public BufferImpl {
+	 * Buffer for transferring data to/from an endpoint
+	 */
+	class Buffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
 		friend class UsbDevice_cout;
 	public:
-		BulkBuffer(BulkEndpoint &endpoint, int size);
-		~BulkBuffer() override;
+		Buffer(int capacity, Endpoint &endpoint);
+		~Buffer() override;
 
-		bool startInternal(int size, Op op) override;
-		void cancel() override;
+		// Buffer methods
+		bool start(Op op) override;
+		bool cancel() override;
 
 	protected:
-		BulkEndpoint &endpoint;
+		Endpoint &endpoint;
 	};
 
 	/**
-		BulkEndpoint
-	*/
-	class BulkEndpoint : public LinkedListNode, public BufferDevice {
+	 * Endpoint
+	 */
+	class Endpoint : public BufferDevice, public IntrusiveListNode {
 		friend class UsbDevice_cout;
 		friend class BulkBuffer;
 	public:
-		BulkEndpoint(UsbDevice_cout &device, int index);
-		~BulkEndpoint();
+		Endpoint(UsbDevice_cout &device, int index);
+		~Endpoint();
 
-		State state() override;
-		[[nodiscard]] Awaitable<> stateChange(int waitFlags = -1) override;
+		// Device methods
+		//StateTasks<const State, Events> &getStateTasks() override;
+		//State state() override;
+		//[[nodiscard]] Awaitable<Condition> until(Condition condition) override;
+
+		// BufferDevice methods
 		int getBufferCount() override;
-		BulkBuffer &getBuffer(int index) override;
+		Buffer &getBuffer(int index) override;
 
 	protected:
 		UsbDevice_cout &device;
 		int index;
 
 		// list of buffers
-		LinkedList<BulkBuffer> buffers;
+		IntrusiveList<Buffer> buffers;
 	};
 
 protected:
-	void handle();// override;
+	void handle();
 
 	Loop_native &loop;
 	TimedTask<Callback> callback;
 
-	// state and coroutines waiting for a state
-	State stat = State::DISABLED;
-	CoroutineTaskList<> stateTasks;
-
-	// coroutines waiting for a control request
-	CoroutineTaskList<usb::Setup *> requestTasks;
+	// state
+	//State stat = State::OPENING;//State::DISABLED;
+	//CoroutineTaskList<Condition> stateTasks;
+	//StateTasks<State, Events> st = State::OPENING;
 
 	bool readDescriptor = true;
 
@@ -108,14 +113,14 @@ protected:
 	bool text;
 
 	// list of control buffers
-	LinkedList<ControlBuffer> controlBuffers;
+	IntrusiveList<ControlBuffer> controlBuffers;
 
-	// list of bulk endpoints
-	LinkedList<BulkEndpoint> bulkEndpoints;
+	// list of bulk/interrupt endpoints
+	IntrusiveList<Endpoint> endpoints;
 
 	// list of active transfers
-	LinkedList2<ControlBuffer> controlTransfers;
-	LinkedList2<BulkBuffer> bulkTransfers;
+	IntrusiveList2<ControlBuffer> controlTransfers;
+	IntrusiveList2<Buffer> transfers;
 };
 
 } // namespace coco

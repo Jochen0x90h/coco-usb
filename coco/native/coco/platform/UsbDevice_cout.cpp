@@ -6,24 +6,33 @@
 namespace coco {
 
 UsbDevice_cout::UsbDevice_cout(Loop_native &loop)
-	: loop(loop), callback(makeCallback<UsbDevice_cout, &UsbDevice_cout::handle>(this))
+    : UsbDevice(State::OPENING)
+    , loop(loop), callback(makeCallback<UsbDevice_cout, &UsbDevice_cout::handle>(this))
 {
-	// call handle() from event loop to get the device descriptor
-	loop.invoke(this->callback);
+    // call handle() from event loop to get the device descriptor
+    loop.invoke(this->callback);
 }
 
-UsbDevice::State UsbDevice_cout::state() {
-	return this->stat;
+//StateTasks<const Device::State, Device::Events> &UsbDevice_cout::getStateTasks() {
+//	return makeConst(this->st);
+//}
+
+/*UsbDevice::State UsbDevice_cout::state() {
+    return this->stat;
 }
 
-Awaitable<> UsbDevice_cout::stateChange(int waitFlags) {
-	if ((waitFlags & (1 << int(this->stat))) == 0)
-		return {};
-	return {this->stateTasks};
-}
+Awaitable<Device::Condition> UsbDevice_cout::until(Condition condition) {
+    // check if IN_* condition is met
+    if ((int(condition) >> int(this->stat)) & 1)
+        return {}; // don't wait
+    return {this->stateTasks, condition};
+}*/
 
-Awaitable<usb::Setup *> UsbDevice_cout::request(usb::Setup &setup) {
-	return {this->requestTasks, &setup};
+usb::Setup UsbDevice_cout::getSetup() {
+    uint16_t value = int(usb::DescriptorType::DEVICE) << 8;
+    uint16_t index = 0;
+    uint16_t length = sizeof(usb::DeviceDescriptor);
+    return {usb::RequestType::STANDARD_DEVICE_IN, uint8_t(usb::Request::GET_DESCRIPTOR), value, index, length};
 }
 
 void UsbDevice_cout::acknowledge() {
@@ -33,201 +42,209 @@ void UsbDevice_cout::stall() {
 }
 
 void UsbDevice_cout::handle() {
-	// on first call to handle(), get device descriptor from user code
-	if (this->readDescriptor) {
-		this->readDescriptor = false;
+    // on first call to handle(), get device descriptor from user code
+    if (this->readDescriptor) {
+        this->readDescriptor = false;
 
-		// enable control buffers
-		for (auto &buffer : this->controlBuffers) {
-			buffer.setReady(0);
-		}
+        // enable control buffers
+        //for (auto &buffer : this->controlBuffers) {
+        //	buffer.setReady(0);
+        //}
 
-		// resume first coroutine waiting for a control request which should write the device descriptor using a ControlBuffer
-		this->requestTasks.doFirst([](usb::Setup *setup) {
-			uint16_t value = int(usb::DescriptorType::DEVICE) << 8;
-			uint16_t index = 0;
-			uint16_t length = sizeof(usb::DeviceDescriptor);
-			*setup = {usb::RequestType::STANDARD_DEVICE_IN, uint8_t(usb::Request::GET_DESCRIPTOR), value, index, length};
-			return true;
-		});
+        // resume the application waiting for an event which should then call getSetup() and send the device descriptor using a ControlBuffer
+        this->st.doAll(Events::REQUEST);
+        //this->stateTasks.doAll([](Condition condition) {
+        //    return (condition & Condition::EVENT1) != 0;
+        //});
+    }
 
-		// change state and resume all coroutines waiting for ready state
-		this->stat = State::READY;
-		this->stateTasks.doAll();
-	}
+    // check if there is a pending control transfer
+    for (auto &buffer : this->controlTransfers) {
+        // get device descriptor
+        auto &deviceDescriptor = buffer.value<usb::DeviceDescriptor>();
+        this->text = deviceDescriptor.bDeviceProtocol == 1;
 
-	// check if there is a pending control transfer
-	for (auto &buffer : this->controlTransfers) {
-		// get device descriptor
-		auto &deviceDescriptor = buffer.value<usb::DeviceDescriptor>();
-		this->text = deviceDescriptor.bDeviceProtocol == 1;
+        // enable bulk buffers
+        /*for (auto &endpoint : this->bulkEndpoints) {
+            for (auto &buffer : endpoint.buffers) {
+                buffer.setReady(0);
+            }
+        }*/
 
-		// enable bulk buffers
-		for (auto &endpoint : this->bulkEndpoints) {
-			for (auto &buffer : endpoint.buffers) {
-				buffer.setReady(0);
-			}
-		}
+        // set ready and resume all coroutines waiting for state change
+        for (auto &endpoint : this->endpoints)
+            endpoint.st.set(State::READY, Events::ENTER_READY);
+        this->st.set(State::READY, Events::ENTER_READY);
 
-		buffer.remove2();
-		buffer.setReady(buffer.xferred);
+        buffer.remove2();
+        buffer.setReady();
 
-		// handle only one buffer
-		break;
-	}
+        // handle only one buffer
+        break;
+    }
 
-	// check if there is a pending bulk transfer
-	for (auto &buffer : this->bulkTransfers) {
-		int endpointIndex = buffer.endpoint.index;
-		int transferred = buffer.xferred;
+    // check if there is a pending bulk transfer
+    if (this->st.state == State::READY) {
+        for (auto &buffer : this->transfers) {
+            int endpointIndex = buffer.endpoint.index;
 
-		std::cout << endpointIndex << ": ";
-		if (this->text) {
-			// text
-			std::cout << std::string(buffer.array<char>().data(), transferred);
-		} else {
-			// binary
-			std::cout << '(' << transferred << ") ";
-			for (int i = 0; i < transferred; ++i) {
-				if ((i & 15) == 0) {
-					if (i != 0)
-						std::cout << "," << std::endl;
-				} else {
-					std::cout << ", ";
-				}
-				std::cout << "0x" << std::setw(2) << std::setfill('0') << std::hex << int(buffer.data()[i]);
-			}
-			std::cout << std::endl;
-		}
+            std::cout << endpointIndex << ": ";
+            if (this->text) {
+                // text
+                std::cout << buffer.string();
+            } else {
+                // binary
+                int transferred = buffer.p.size;
+                std::cout << '(' << transferred << ") ";
+                for (int i = 0; i < transferred; ++i) {
+                    if ((i & 15) == 0) {
+                        if (i != 0)
+                            std::cout << "," << std::endl;
+                    } else {
+                        std::cout << ", ";
+                    }
+                    std::cout << "0x" << std::setw(2) << std::setfill('0') << std::hex << int(buffer.data()[i]);
+                }
+                std::cout << std::endl;
+            }
 
-		buffer.remove2();
-		buffer.setReady(transferred);
+            buffer.remove2();
+            buffer.setReady();
 
-		// handle only one buffer
-		break;
-	}
+            // handle only one buffer
+            break;
+        }
+    }
 
-	if (!this->controlTransfers.empty() || !this->bulkTransfers.empty())
-		this->loop.invoke(this->callback);
+    // invoke handle() again when there are more pending transfers
+    if (!this->controlTransfers.empty() || (!this->transfers.empty() && this->st.state == State::READY))
+        this->loop.invoke(this->callback);
 }
 
 
 // ControlBuffer
 
-UsbDevice_cout::ControlBuffer::ControlBuffer(UsbDevice_cout &device, int size)
-	: BufferImpl(new uint8_t[size], size, device.stat)
-	, device(device)
+UsbDevice_cout::ControlBuffer::ControlBuffer(int capacity, UsbDevice_cout &device)
+    : coco::Buffer(new uint8_t[capacity], capacity, device.st.state)
+    , device(device)
 {
-	device.controlBuffers.add(*this);
+    device.controlBuffers.add(*this);
 }
 
 UsbDevice_cout::ControlBuffer::~ControlBuffer() {
-	delete [] this->dat;
+    delete [] this->p.data;
 }
 
-bool UsbDevice_cout::ControlBuffer::startInternal(int size, Op op) {
-	if (this->stat != State::READY) {
-		assert(false);
-		return false;
-	}
+bool UsbDevice_cout::ControlBuffer::start(Op op) {
+    if (this->st.state != State::READY) {
+        assert(this->st.state != State::BUSY);
+        return false;
+    }
 
-	// check if READ or WRITE flag is set
-	assert((op & Op::READ_WRITE) != 0);
+    // check if READ or WRITE flag is set
+    assert((op & Op::READ_WRITE) != 0);
 
-	this->xferred = size;
+    //this->xferred = size;
 
-	this->device.controlTransfers.add(*this);
-	this->device.loop.invoke(this->device.callback);
+    this->device.controlTransfers.add(*this);
+    this->device.loop.invoke(this->device.callback);
 
-	// set state
-	setBusy();
+    // set state
+    setBusy();
 
-	return true;
+    return true;
 }
 
-void UsbDevice_cout::ControlBuffer::cancel() {
-	if (this->stat != State::BUSY)
-		return;
+bool UsbDevice_cout::ControlBuffer::cancel() {
+    if (this->st.state != State::BUSY)
+        return false;
 
-	this->remove2();
+    this->remove2();
 
-	// cancel takes effect immediately
-	setReady(0);
+    // cancel takes effect immediately
+    setReady(0);
+    return true;
 }
 
 
-// BulkBuffer
+// Buffer
 
-UsbDevice_cout::BulkBuffer::BulkBuffer(BulkEndpoint &endpoint, int size)
-	: BufferImpl(new uint8_t[size], size, endpoint.device.stat)
-	, endpoint(endpoint)
+UsbDevice_cout::Buffer::Buffer(int capacity, Endpoint &endpoint)
+    : coco::Buffer(new uint8_t[capacity], capacity, endpoint.device.st.state)
+    , endpoint(endpoint)
 {
-	endpoint.buffers.add(*this);
+    endpoint.buffers.add(*this);
 }
 
-UsbDevice_cout::BulkBuffer::~BulkBuffer() {
-	delete [] this->dat;
+UsbDevice_cout::Buffer::~Buffer() {
+    delete [] this->p.data;
 }
 
-bool UsbDevice_cout::BulkBuffer::startInternal(int size, Op op) {
-	if (this->stat != State::READY) {
-		assert(this->stat != State::BUSY);
-		return false;
-	}
+bool UsbDevice_cout::Buffer::start(Op op) {
+    if (this->st.state != State::READY) {
+        assert(this->st.state != State::BUSY);
+        return false;
+    }
 
-	// check if READ or WRITE flag is set
-	assert((op & Op::READ_WRITE) != 0);
+    // check if READ or WRITE flag is set
+    assert((op & Op::READ_WRITE) != 0);
 
-	this->xferred = size;
+    //this->xferred = size;
 
-	auto &device = this->endpoint.device;
-	device.bulkTransfers.add(*this);
-	device.loop.invoke(device.callback);
+    auto &device = this->endpoint.device;
+    device.transfers.add(*this);
+    device.loop.invoke(device.callback);
 
-	// set state
-	setBusy();
+    // set state
+    setBusy();
 
-	return true;
+    return true;
 }
 
-void UsbDevice_cout::BulkBuffer::cancel() {
-	if (this->stat != State::BUSY)
-		return;
+bool UsbDevice_cout::Buffer::cancel() {
+    if (this->st.state != State::BUSY)
+        return false;
 
-	this->remove2();
+    this->remove2();
 
-	// cancel takes effect immediately
-	setReady(0);
+    // cancel takes effect immediately
+    setReady(0);
+    return true;
 }
 
 
-// BulkEndpoint
+// Endpoint
 
-UsbDevice_cout::BulkEndpoint::BulkEndpoint(UsbDevice_cout &device, int index)
-	: device(device), index(index)
+UsbDevice_cout::Endpoint::Endpoint(UsbDevice_cout &device, int index)
+    : BufferDevice(State::OPENING), device(device), index(index)
 {
-	device.bulkEndpoints.add(*this);
+    device.endpoints.add(*this);
 }
 
-UsbDevice_cout::BulkEndpoint::~BulkEndpoint() {
+UsbDevice_cout::Endpoint::~Endpoint() {
 }
 
-Device::State UsbDevice_cout::BulkEndpoint::state() {
-	return this->device.stat;
+//StateTasks<const Device::State, Device::Events> &UsbDevice_cout::Endpoint::getStateTasks() {
+//	return makeConst(this->device.st);
+//}
+
+/*Device::State UsbDevice_cout::BulkEndpoint::state() {
+    return this->device.stat;
 }
 
-Awaitable<> UsbDevice_cout::BulkEndpoint::stateChange(int waitFlags) {
-	if ((waitFlags & (1 << int(this->device.stat))) == 0)
-		return {};
-	return {this->device.stateTasks};
+Awaitable<Device::Condition> UsbDevice_cout::BulkEndpoint::until(Condition condition) {
+    // check if IN_* condition is met
+    if ((int(condition) >> int(this->device.stat)) & 1)
+        return {}; // don't wait
+    return {this->device.stateTasks, condition};
+}*/
+
+int UsbDevice_cout::Endpoint::getBufferCount() {
+    return this->buffers.count();
 }
 
-int UsbDevice_cout::BulkEndpoint::getBufferCount() {
-	return this->buffers.count();
-}
-
-UsbDevice_cout::BulkBuffer &UsbDevice_cout::BulkEndpoint::getBuffer(int index) {
-	return this->buffers.get(index);
+UsbDevice_cout::Buffer &UsbDevice_cout::Endpoint::getBuffer(int index) {
+    return this->buffers.get(index);
 }
 
 } // namespace coco

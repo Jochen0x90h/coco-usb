@@ -11,3 +11,4 @@ Add coco-usb/\<version> to your conanfile where version corresponds to the git t
 
 ## Supported Platforms
 * nRF52
+* STM32
