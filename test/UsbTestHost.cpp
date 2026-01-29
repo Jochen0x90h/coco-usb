@@ -44,12 +44,12 @@ enum class Request : uint8_t {
 };
 
 inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_t wIndex) {
-    buffer.setHeader<usb::Setup>({usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 0});
+    buffer.header<usb::Setup>() = {usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 0};
     return buffer.write(0);
 }
 
 inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_t wIndex, int32_t data) {
-    buffer.setHeader<usb::Setup>({usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 4});
+    buffer.header<usb::Setup>() = {usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 4};
     return buffer.writeValue(data);
 }
 

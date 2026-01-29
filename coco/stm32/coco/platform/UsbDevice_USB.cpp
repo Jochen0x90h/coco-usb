@@ -1,833 +1,639 @@
 #include "UsbDevice_USB.hpp"
+#include <coco/convert.hpp>
 #include <coco/debug.hpp>
 #include <coco/platform/nvic.hpp>
 
 
-#ifdef USB
-namespace coco {
-namespace {
-
 /*
-	Glossary
-		ZLP: Zero Length Packet
+    Glossary
+        ZLP: Zero Length Packet
 
-	Packet Memory
-		see https://libopencm3.org/docs/latest/stm32l4/html/st__usbfs__v2_8h.html
-		layout:
-		table of buffer descriptors
-		buffers for endpoint 0
-		buffers for endpoint 1
-		buffers for endpoint 2
-		...
+    Packet Memory layout
+        Table of buffer descriptors (BufferDescriptor[8])
+        Buffers for endpoint 0
+            RX Buffer of 64 bytes
+            TX Buffer of 64 bytes
+        Buffers for endpoint 1
+        Bbuffers for endpoint 2
+        ...
+        Buffers for endpoint 7
 */
 
-struct BufferDescriptor {
-	volatile uint16_t offset;
-	volatile uint16_t size;
+#ifdef HAVE_USBD
 
-	int transferred() const {return this->size & 0x3ff;}
-};
-
-struct EndpointBufferDescriptors {
-	BufferDescriptor tx; // offset, size
-	BufferDescriptor rx; // offset, size, blocks (count and flag)
-};
-const auto ENDPOINT_BUFFER_DESCRIPTORS = (EndpointBufferDescriptors *)USB_PMAADDR;
-constexpr int TABLE_SIZE = 8 * sizeof(EndpointBufferDescriptors);
-
-const auto CONTROL_RX_BUFFER = (volatile uint16_t *)(USB_PMAADDR + TABLE_SIZE);
-
-inline volatile uint16_t &getEndpointRegister(int ep) {return (&USB->EP0R)[ep * 2];}
-
-
-// send data to the host
-void usbSend(int ep, const void *data, int size) {
-	auto &bd = ENDPOINT_BUFFER_DESCRIPTORS[ep].tx;
-
-	// copy data from memory into tx buffer
-	const uint16_t *src = (const uint16_t*)data;
-	volatile uint16_t *dst = (volatile uint16_t *)(USB_PMAADDR + bd.offset);
-	volatile uint16_t *end = dst + ((size + 1) >> 1);
-	while (dst != end) {
-		*dst = *src;
-		++src;
-		++dst;
-	}
-
-	// set size of packet in tx buffer descriptor
-	bd.size = size;
-
-	// indicate that we are ready to send
-	// keep DTOG_RX DTOG_TX STAT_RX, cancel STAT_TX, clear CTR_TX, don't clear CTR_RX, toggle STAT_TX.VALID
-	auto &EPxR = getEndpointRegister(ep);
-	EPxR = ((EPxR & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EPRX_STAT | USB_EP_CTR_TX)) | USB_EP_CTR_RX) ^ USB_EP_TX_VALID;
-}
-
-void usbAckSend(int ep) {
-	// keep DTOG_RX DTOG_TX STAT_RX STAT_TX, clear CTR_TX, don't clear CTR_RX
-	auto &EPxR = getEndpointRegister(ep);
-	EPxR = ((EPxR & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EPRX_STAT | USB_EPTX_STAT | USB_EP_CTR_TX)) | USB_EP_CTR_RX);
-}
-
-// indicate that we want to receive data from the host
-void usbReceive(int ep) {
-	// keep DTOG_RX DTOG_TX STAT_TX, cancel STAT_RX, clear CTR_RX, don't clear CTR_TX, toggle STAT_RX.STALL
-	auto &EPxR = getEndpointRegister(ep);
-	EPxR = ((EPxR & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EPTX_STAT | USB_EP_CTR_RX)) | USB_EP_CTR_TX) ^ USB_EP_RX_VALID;
-}
-
-void usbAckReceive(int ep) {
-	// keep DTOG_RX DTOG_TX STAT_RX STAT_TX, clear CTR_RX, don't clear CTR_TX
-	auto &EPxR = getEndpointRegister(ep);
-	EPxR = ((EPxR & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EPRX_STAT | USB_EPTX_STAT | USB_EP_CTR_RX)) | USB_EP_CTR_TX);
-}
-
-void usbFinishReceive(int ep, void *data, int size) {
-	auto &bd = ENDPOINT_BUFFER_DESCRIPTORS[ep].rx;
-
-	// copy data from rx buffer into memory
-	const volatile uint16_t *src = (const volatile uint16_t *)(USB_PMAADDR + bd.offset);
-	uint16_t *dst = (uint16_t*)data;
-	uint16_t *end = dst + ((size + 1) >> 1);
-	while (dst != end) {
-		*dst = *src;
-		++src;
-		++dst;
-	}
-}
-
-
-// prepare status in transfer for control endpoint 0 (send a ZLP)
-inline void usbControlStatusIn() {
-	ENDPOINT_BUFFER_DESCRIPTORS[0].tx.size = 0;
-
-	// keep DTOG_RX DTOG_TX STAT_RX, cancel STAT_TX, clear CTR_RX CTR_TX, toggle STAT_TX.VALID
-	USB->EP0R = ((USB->EP0R & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EPRX_STAT | USB_EP_CTR_RX | USB_EP_CTR_TX)) ) ^ USB_EP_TX_VALID;
-}
-
-// prepare status out transfer for control endpoint 0 (expect a ZLP)
-inline void usbControlStatusOut() {
-	// keep DTOG_RX DTOG_TX STAT_TX, cancel STAT_RX, clear CTR_RX CTR_TX, set EP_KIND (STATUS_OUT), toggle STAT_RX.VALID
-	USB->EP0R = ((USB->EP0R & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EPTX_STAT | USB_EP_CTR_RX | USB_EP_CTR_TX)) | USB_EP_KIND) ^ USB_EP_RX_VALID;
-}
-
-// stall both directions of control endpoint 0
-inline void usbControlStall() {
-	// keep DTOG_RX DTOG_TX, cancel STAT_RX STAT_TX, clear CTR_RX CTR_TX EP_KIND (STATUS_OUT), toggle STAT_RX.STALL STAT_TX.STALL
-	USB->EP0R = ((USB->EP0R & ~(USB_EP_DTOG_RX | USB_EP_DTOG_TX | USB_EP_CTR_RX | USB_EP_CTR_TX | USB_EP_KIND)) ) ^ (USB_EP_RX_STALL | USB_EP_TX_STALL);
-}
-
-
-} // anonymous namespace
-
-
-// USB_LP_IRQn: All USB events such as correct transfer, reset etc.
-// USB_HP_IRQn: Correct transfer for isochronous and double buffered bulk transfers
-// USBWakeUp_IRQn: USB Wakeup through EXTI line Interrupt
-
-#ifdef STM32G4
-#define USB_IRQn USB_LP_IRQn
-#endif
-
-
-// UsbDevice_USB
+namespace coco {
 
 UsbDevice_USB::UsbDevice_USB(Loop_Queue &loop)
-	: UsbDevice(State::OPENING), loop(loop)
+    : UsbDevice(State::OPENING)
+    , loop_(loop)
 {
-#ifdef STM32F0
-	// enable HSI48 (gets enabled automatically)
+    //debug::out << "UsbDevice_USB\n";
 
-	// set HSI48 as USB clock source (is default)
-	//RCC->CFGR3 = RCC->CFGR3 & ~RCC_CFGR3_USBSW_Msk;
+    usbd::enableClock()
+        .clear(usbd::Status::ALL)
+        .enable(usbd::Interrupt::RESET | usbd::Interrupt::CORRECT_TRANSFER);
 
-	// enable clock of USB and CRS (clock recovery system)
-	RCC->APB1ENR = RCC->APB1ENR | RCC_APB1ENR_CRSEN | RCC_APB1ENR_USBEN;
-#endif
-#ifdef STM32G4
-	// enable HSI48 and wait until ready
-	RCC->CRRCR = RCC_CRRCR_HSI48ON;
-	while ((RCC->CRRCR & RCC_CRRCR_HSI48RDY) == 0);
-
-	// set HSI48 as USB clock source (is default)
-	//RCC->CCIPR = RCC->CCIPR & ~RCC_CCIPR_CLK48SEL_Msk;
-
-	// enable clock of USB and CRS (clock recovery system)
-	RCC->APB1ENR1 = RCC->APB1ENR1 | RCC_APB1ENR1_CRSEN | RCC_APB1ENR1_USBEN;
-#endif
-
-	// enable automatic trimming and oscillator clock for the frequency error counter
-	CRS->CR = CRS->CR | CRS_CR_AUTOTRIMEN | CRS_CR_CEN;
-
-	// switch on usb transceiver, but keep reset (reference manual: System and power-on reset)
-	USB->CNTR = USB_CNTR_FRES;
-
-	// wait for at least 1us (see data sheet: USB startup time)
-	debug::sleep(1us);
-
-	// enable pull-up resistor to start enumeration
-	USB->BCDR = USB_BCDR_DPPU;
-
-	// exit reset of usb
-	USB->CNTR = 0;
-
-	// clear interrupts
-	USB->ISTR = 0;
-
-	// set buffer descriptor table offset inside packet memory (which starts at USB_PMAADDR)
-	USB->BTABLE = 0;
-
-	// enable correct transfer and reset interrupts
-	USB->CNTR = USB_CNTR_CTRM | USB_CNTR_RESETM;
-
-	// enable USB interrupt
-	nvic::setPriority(USB_IRQn, nvic::Priority::HIGH);
-	nvic::enable(USB_IRQn);
+    // enable USB interrupt
+    nvic::setPriority(usbd::irq, nvic::Priority::HIGH);
+    nvic::enable(usbd::irq);
+    //debug::out << "UsbDevice_USB2\n";
 }
 
 UsbDevice_USB::~UsbDevice_USB() {
 }
 
-//StateTasks<const Device::State, Device::Events> &UsbDevice_USB::getStateTasks() {
-//	return makeConst(this->st);
-//}
-
-/*Device::State UsbDevice_USB::state() {
-	return this->stat;
-}
-
-Awaitable<Device::Condition> UsbDevice_USB::until(Condition condition) {
-	// check if IN_* condition is met
-	if ((int(condition) >> int(this->stat.load())) & 1)
-		return {}; // don't wait
-	return {this->stateTasks, condition};
-}*/
-
 usb::Setup UsbDevice_USB::getSetup() {
-	int s0 = CONTROL_RX_BUFFER[0];
-	auto requestType = usb::RequestType(s0);
-	uint8_t request = s0 >> 8;
-	uint16_t value = CONTROL_RX_BUFFER[1];
-	uint16_t index = CONTROL_RX_BUFFER[2];
-	uint16_t length = CONTROL_RX_BUFFER[3];
-	return {requestType, request, value, index, length};
+    auto usb = usbd::instance();
+    return usb.getSetup<usb::Setup, usb::RequestType>();
 }
 
 void UsbDevice_USB::acknowledge() {
-	// acknowledge using ZLP of opposite direction
-	if (this->controlMode == Mode::DATA_IN)
-		usbControlStatusOut();
-	else if (this->controlMode == Mode::DATA_OUT)
-		usbControlStatusIn();
-	else
-		assert(false);
+    auto usb = usbd::instance();
+
+    // acknowledge using ZLP of opposite direction
+    if (controlMode_ == Mode::DATA_IN)
+        usb.controlStatusOut();
+    else if (controlMode_ == Mode::DATA_OUT)
+        usb.controlStatusIn();
+    else
+        assert(false);
 }
 
 void UsbDevice_USB::stall() {
-	usbControlStall();
+    auto usb = usbd::instance();
+
+    usb.controlStall();
 }
 
 void UsbDevice_USB::USB_IRQHandler() {
-	int istr = USB->ISTR;
-	if ((istr & USB_ISTR_RESET) != 0) {
-		// clear interrupt flag
-		USB->ISTR = ~USB_ISTR_RESET;
-		//debug::setBlue();
+    //debug::out << "irq\n";
+    auto usb = usbd::instance();
 
-		// setup buffers for endpoint 0 (tx count is set when actually sending data)
-		auto &ebd = ENDPOINT_BUFFER_DESCRIPTORS[0];
-		ebd.rx.offset = TABLE_SIZE;
-		ebd.rx.size = 0x8000 | (1 << 10); // rx buffer size is 64
-		ebd.tx.offset = TABLE_SIZE + 64;
-		ebd.tx.size = 64;
+    auto status = usb.status();
+    if ((status & usbd::Status::RESET) != 0) {
+        // device was connected to the host
+        //debug::out << "connected\n";
+        usbd::BufferCapacity bufferCapacity[1] = {{usbd::RxCapacity::_64, 64}};
+        usb.configure(bufferCapacity);
+        usb.reset();
+    }
 
-		// setup control endpoint 0
-		USB->EP0R = USB_EP_RX_VALID | USB_EP_TX_STALL | USB_EP_CONTROL | 0;
+    auto status0 = usb.endpointStatus(0);
+    if ((status0 & usbd::EndpointStatus::RX) != 0) {
+        //debug::out << "rx\n";
+        // received a packet from the host on endpoint 0
+        usb.rxAck(0);
 
-		// enable usb at usb address 0
-		USB->DADDR = USB_DADDR_EF | 0;
-	}
+        if ((status0 & usbd::EndpointStatus::SETUP) != 0) {
+            // received a setup request from host
+            auto [requestType, request] = usb.getSetupRequest<usb::RequestType>();
+            //debug::out << "setup " << hex(rt) << ' ' << hex(request) << '\n';
 
-	int ep0r = USB->EP0R;
-	if (ep0r & USB_EP_CTR_RX) {
-		// received a packet from the host on endpoint 0
-		usbAckReceive(0);
+            if (requestType == usb::RequestType::STANDARD_DEVICE_OUT && request == usb::Request::SET_ADDRESS) {
+                // address is value of setup packet, keep in control receive buffer
+                //debug::out << "set address\n";
 
-		if (ep0r & USB_EP_SETUP) {
-			// received a setup request from host
-			int s0 = CONTROL_RX_BUFFER[0];
-			auto requestType = usb::RequestType(s0);
-			uint8_t request = s0 >> 8;
+                // enter status stage by sending ZLP of opposite direction
+                usb.controlStatusIn();
+                controlMode_ = Mode::SET_ADDRESS;
+            } else if (requestType == usb::RequestType::STANDARD_DEVICE_OUT && request == usb::Request::SET_CONFIGURATION) {
+                // set configuration
+                //debug::out << "set configuration\n";
 
-			if (requestType == usb::RequestType::STANDARD_DEVICE_OUT && request == usb::Request::SET_ADDRESS) {
-				// address is value of setup packet, keep in control receive buffer
+                // configure endpoints
+                usbd::BufferCapacity bufferCapacities[8] = {};
+                for (auto &endpoint : endpoints_) {
+                    if (endpoint.inIndex_ > 0)
+                        usb.txInit(endpoint.inIndex_, endpoint.type_);
+                    if (endpoint.outIndex_ > 0)
+                        usb.rxInit(endpoint.outIndex_, endpoint.type_);
 
-				// enter status stage by sending ZLP of opposite direction
-				usbControlStatusIn();
-				this->controlMode = Mode::SET_ADDRESS;
-			} else if (requestType == usb::RequestType::STANDARD_DEVICE_OUT && request == usb::Request::SET_CONFIGURATION) {
-				// set configuration
-				//uint8_t configurationValue = setup->value & 0xff;
+                    // outIndex_ or inIndex_ are zero when invalid
+                    bufferCapacities[endpoint.outIndex_].rx = usbd::RxCapacity::_64;
+                    bufferCapacities[endpoint.inIndex_].tx = 64;
+                }
+                bufferCapacities[0].rx = usbd::RxCapacity::_64;
+                bufferCapacities[0].tx = 64;
+                usb.configure(bufferCapacities);
 
-				//  enable endpoints
-				int offset = TABLE_SIZE + 2 * 64;
-				for (auto &endpoint : this->endpoints) {
-					if (endpoint.inIndex > 0) {
-						auto &descriptor = ENDPOINT_BUFFER_DESCRIPTORS[endpoint.inIndex];
-						descriptor.tx.offset = offset;
-						descriptor.tx.size = 64;
-						offset += 64;
+                // enter status stage by sending ZLP of opposite direction
+                usb.controlStatusIn();
+                controlMode_ = Mode::STATUS;
 
-						// configure tx (in) endpoint: stall send, clear other toggle bits
-						auto &EPxR = getEndpointRegister(endpoint.inIndex);
-						EPxR = ((EPxR
-								& ~(USB_EP_CTR_TX // clear TX correct transfer flag
-									| USB_EP_TYPE_MASK // clear endpoint type
-									| USB_EP_KIND // clear endpoint kind
-									| USB_EPADDR_FIELD // clear endpoint index (address)
-									| USB_EP_DTOG_RX // keep RX toggle (0 = keep, 1 = toggle)
-									| USB_EPRX_STAT)) // keep RX status (0 = keep, 1 = toggle)
-								| int(endpoint.type)/*USB_EP_BULK*/ // set endpoint type
-								| endpoint.inIndex) // set endpoint index (address)
-							^ USB_EP_TX_NAK // set TX status to NAK (nothing to send)
-							^ 0; // clear TX toggle (toggle when set)
-					}
-					if (endpoint.outIndex > 0) {
-						auto &descriptor = ENDPOINT_BUFFER_DESCRIPTORS[endpoint.outIndex];
-						descriptor.rx.offset = offset;
-						descriptor.rx.size = 0x8000 | (1 << 10); // rx buffer size is 64
-						offset += 64;
+                // start transfers that are already waiting
+                for (int ep = 1; ep < 8; ++ep) {
+                    auto &transfers = transfers_[ep - 1];
+                    auto inBuffer = transfers.in.frontOrNull();
+                    if (inBuffer != nullptr)
+                        inBuffer->writeFirst();
+                    auto outBuffer = transfers.out.frontOrNull();
+                    if (outBuffer != nullptr)
+                        usb.rxStart(ep);
+                }
 
-						// configure rx (out) endpoint: ready to receive, clear other toggle bits
-						auto &EPxR = getEndpointRegister(endpoint.outIndex);
-						EPxR = ((EPxR
-								& ~(USB_EP_CTR_RX // clear RX correct transfer flag
-									| USB_EP_TYPE_MASK // clear endpoint type
-									| USB_EP_KIND // clear endpoint kind
-									| USB_EPADDR_FIELD // clear endpoint index (address)
-									| USB_EP_DTOG_TX // keep TX toggle (0 = keep, 1 = toggle)
-									| USB_EPTX_STAT)) // keep TX status (0 = keep, 1 = toggle)
-								| int(endpoint.type)/*USB_EP_BULK*/ // set endpoint type
-								| endpoint.outIndex) // set endpoint index (address)
-							^ USB_EP_RX_VALID // set RX status to VALID (ready to receive)
-							^ 0; // clear RX toggle (toggle when set)
-					}
-				}
+                // set state
+                iState_ = State::READY;
 
-				// enter status stage by sending ZLP of opposite direction
-				usbControlStatusIn();
-				this->controlMode = Mode::STATUS;
+                // push this to the event handler queue so that the application gets notified about the sate change in UsbDevice_USB::handle()
+                Events e = iEvents_;
+                iEvents_ = e | Events::ENTER_READY;
+                if (e == Events::NONE)
+                    loop_.push(*this);
+            } else if (requestType == usb::RequestType::STANDARD_INTERFACE_OUT && request == usb::Request::SET_INTERFACE) {
+                // set interface (interface index is in setup.index, alternate setting is in setup.value)
 
-				// start transfers that are already waiting
-				for (int ep = 1; ep < 8; ++ep) {
-					auto &transfers = this->transfers[ep - 1];
-					auto inBuffer = transfers.in.frontOrNull();
-					if (inBuffer != nullptr)
-						inBuffer->startWrite();
-					auto outBuffer = transfers.out.frontOrNull();
-					if (outBuffer != nullptr)
-						usbReceive(ep);
-				}
+                // enter status stage by sending ZLP of opposite direction
+                usb.controlStatusIn();
+            } else {
+                controlMode_ = (requestType & usb::RequestType::DIRECTION_MASK) == usb::RequestType::OUT ? Mode::DATA_OUT : Mode::DATA_IN;
 
-				// set state
-				this->stat = State::READY;
+                // push this to the event handler queue so that the control request gets forwarded to the application in UsbDevice_USB::handle()
+                Events e = iEvents_;
+                iEvents_ = e | Events::REQUEST;
+                if (e == Events::NONE)
+                    loop_.push(*this);
+            }
+        } else {
+            // received data from host
+            switch (controlMode_) {
+            case Mode::DATA_OUT:
+                // control OUT transfer completed
+                controlTransfers_.pop(
+                    [](ControlBufferBase &buffer) {
+                        // returns false if not finished yet
+                        return buffer.readNext();
+                    },
+                    [&usb](ControlBufferBase &next) {
+                        // start next buffer, only allowed when previus buffer had PARTIAL flag
+                        assert(controlMode_ == Mode::DATA_OUT);
+                        usb.rxStart(0);//usbReceive(0); // start read
+                    }
+                );
+                break;
+            //case Mode::STATUS_IN:
+            default:
+                // status stage of IN control transfer completed
+                //debug::setGreen();
+                controlMode_ = Mode::IDLE;
+                usb.controlStall();
+                break;
+            }
+        }
+    }
+    if ((status0 & usbd::EndpointStatus::TX) != 0) {
+        // sent data to host
+        usb.txAck(0);
 
-				// push this to the event handler queue so that the application gets notified about the sate change in UsbDevice_USB::handle()
-				Events e = this->events;
-				this->events = e | Events::ENTER_READY;
-				if (e == Events::NONE)
-					this->loop.push(*this);
-			} else if (requestType == usb::RequestType::STANDARD_INTERFACE_OUT && request == usb::Request::SET_INTERFACE) {
-				// set interface (interface index is in setup.index, alternate setting is in setup.value)
+        switch (controlMode_) {
+        case Mode::DATA_IN:
+            // control IN transfer completed
+            controlTransfers_.pop(
+                [](ControlBufferBase &buffer) {
+                    return buffer.writeNext();
+                },
+                [](ControlBufferBase &next) {
+                    // start next buffer, only allowed when previus buffer had PARTIAL flag
+                    assert(controlMode_ == Mode::DATA_IN);
+                    next.writeFirst();
+                }
+            );
+            break;
+        case Mode::SET_ADDRESS:
+            // status stage of "set address" OUT control transfer complete, now set address
+            {
+                //int address =
+                usb.applyAddress();
+                //debug::out << "set address " << dec(address) << '\n';
+            }
+            // fall through
+        default:
+            // status stage of OUT control transfer complete
+            controlMode_ = Mode::IDLE;
+            usb.controlStall();
+            break;
+        }
+    }
 
-				// enter status stage by sending ZLP of opposite direction
-				usbControlStatusIn();
-			} else {
-				this->controlMode = (requestType & usb::RequestType::DIRECTION_MASK) == usb::RequestType::OUT ? Mode::DATA_OUT : Mode::DATA_IN;
+    for (int ep = 1; ep < 8; ++ep) {
+        auto statusN = usb.endpointStatus(ep);
+        if ((statusN & usbd::EndpointStatus::RX) != 0) {
+            // OUT transfer completed (received from host)
+            usb.rxAck(ep);
+            auto &transfer = transfers_[ep - 1];
 
-				// push this to the event handler queue so that the control request gets forwarded to the application in UsbDevice_USB::handle()
-				Events e = this->events;
-				this->events = e | Events::REQUEST;
-				if (e == Events::NONE)
-					this->loop.push(*this);
-			}
-		} else {
-			// received data from host
-			switch (this->controlMode) {
-			case Mode::DATA_OUT:
-				// control OUT transfer completed
-				this->controlTransfers.pop(
-					[](ControlBufferBase &buffer) {
-						return buffer.finishRead();
-					},
-					[](ControlBufferBase &next) {
-						// start next buffer, only allowed when previus buffer had PARTIAL flag
-						assert(this->controlMode == Mode::DATA_OUT);
-						usbReceive(0); // start read
-					}
-				);
-				break;
-			//case Mode::STATUS_IN:
-			default:
-				// status stage of IN control transfer completed
-				//debug::setGreen();
-				this->controlMode = Mode::IDLE;
-				usbControlStall();
-				break;
-			}
-		}
-	}
-	if (ep0r & USB_EP_CTR_TX) {
-		// sent data to host
-		usbAckSend(0);
+            if (transfer.out.pop(
+                [](BufferBase &buffer) {
+                    // returns false if not finished yet
+                    return buffer.readNext();
+                },
+                [&usb, ep](BufferBase &next) {
+                    // start next buffer
+                    usb.rxStart(ep); // start read
+                }
+            ) == -1) {
+                // store flag that there is a pending OUT packet
+                transfer.outAvailable = true;
+            }
+        }
+        if ((statusN & usbd::EndpointStatus::TX) != 0) {
+            // IN transfer completed (sent to host)
+            usb.txAck(ep);
+            auto &transfer = transfers_[ep - 1];
 
-		switch (this->controlMode) {
-		case Mode::DATA_IN:
-			// control IN transfer completed
-			this->controlTransfers.pop(
-				[](ControlBufferBase &buffer) {
-					return buffer.finishWrite();
-				},
-				[](ControlBufferBase &next) {
-					// start next buffer, only allowed when previus buffer had PARTIAL flag
-					assert(this->controlMode == Mode::DATA_IN);
-					next.startWrite();
-				}
-			);
-			break;
-		case Mode::SET_ADDRESS:
-			// status stage of "set address" OUT control transfer complete, now set address
-			USB->DADDR = USB_DADDR_EF | CONTROL_RX_BUFFER[1];
-			// fall through
-		default:
-			// status stage of OUT control transfer complete
-			this->controlMode = Mode::IDLE;
-			usbControlStall();
-			break;
-		}
-	}
-
-	for (int ep = 1; ep < 8; ++ep) {
-		int EPxR = getEndpointRegister(ep);
-		if (EPxR & USB_EP_CTR_RX) {
-			// OUT transfer completed (received from host)
-			usbAckReceive(ep);
-			auto &transfer = this->transfers[ep - 1];
-
-			if (transfer.out.pop(
-				[](BufferBase &buffer) {
-					return buffer.finishRead();
-				},
-				[ep](BufferBase &next) {
-					// start next buffer
-					usbReceive(ep); // start read
-				}
-			) == -1) {
-				// store flag that there is a pending OUT packet
-				transfer.outAvailable = true;
-			}
-		}
-		if (EPxR & USB_EP_CTR_TX) {
-			// IN transfer completed (sent to host)
-			usbAckSend(ep);
-			auto &transfer = this->transfers[ep - 1];
-
-			transfer.in.pop(
-				[](BufferBase &buffer) {
-					return buffer.finishWrite();
-				},
-				[](BufferBase &next) {
-					// start next buffer
-					next.startWrite();
-				}
-			);
-		}
-	}
+            transfer.in.pop(
+                [](BufferBase &buffer) {
+                    return buffer.writeNext();
+                },
+                [](BufferBase &next) {
+                    // start next buffer
+                    next.writeFirst();
+                }
+            );
+        }
+    }
 }
 
 // called from event loop to notify app about state changes and control requests
 void UsbDevice_USB::handle() {
-	State state = this->stat;
-	Events events = this->events.exchange(Events::NONE);
+    /*nvic::disable(USB_IRQn);
+    State state = iState_;
+    Events events = iEvents_;
+    iEvents_ = Events::NONE;
+    nvic::enable(USB_IRQn);*/
+    State state = iState_;
+    Events events = iEvents_.exchange(Events::NONE);
 
-	// set state and resume all coroutines waiting for state change
-	if ((events & Events::ENTER_ANY) != 0) {
-		for (auto &endpoint : this->endpoints)
-			endpoint.st.set(state, events);
-	}
-	this->st.set(state, events);
+    // set state and resume all coroutines waiting for state change
+    st.set(state);
+    if ((events & Events::ENTER_ANY) != 0) {
+        for (auto &endpoint : endpoints_)
+            endpoint.st.set(state).notify(events);
+    }
+    st.notify(events);
 }
 
 
 // ControlBufferBase
 
 UsbDevice_USB::ControlBufferBase::ControlBufferBase(uint8_t *data, int capacity, UsbDevice_USB &device)
-	: Buffer(data, capacity, device.stat)
-	, device(device)
+    : Buffer(data, capacity, device.iState_)
+    , device_(device)
 {
-	device.controlBuffers.add(*this);
+    device.controlBuffers_.add(*this);
 }
 
 UsbDevice_USB::ControlBufferBase::~ControlBufferBase() {
 }
 
 bool UsbDevice_USB::ControlBufferBase::start(Op op) {
-	if (this->st.state != State::READY) {
-		assert(this->p.state != State::BUSY);
-		return false;
-	}
+    if (st.state != State::READY) {
+        assert(st.iState_ != State::BUSY);
+        return false;
+    }
 
-	// check if READ or WRITE flag is set
-	assert((op & Op::READ_WRITE) != 0);
-	this->op = op;
+    // check if READ or WRITE flag is set
+    assert((op & Op::READ_WRITE) != 0);
+    op_ = op;
 
-	// start the transfer
-	auto &device = this->device;
-	this->transferIt = this->p.data;
-	if ((op & Op::WRITE) == 0) {
-		// read/OUT
-		this->transferEnd = this->p.data + this->p.capacity;
-		if (device.controlMode != UsbDevice_USB::Mode::DATA_OUT) {
-			assert(false);
-			return false;
-		}
+    // start the transfer
+    // note that for read transfers no zero length packet follows when last transfer is 64 bytes
+    auto &device = device_;
+    transferIt_ = data_;
+    transferEnd_ = data_ + size_;
+    if ((op & Op::WRITE) == 0) {
+        // read/OUT
+        if (device.controlMode_ != UsbDevice_USB::Mode::DATA_OUT) {
+            assert(false);
+            return false;
+        }
 
-		// add to list of pending transfers and start immediately if list was empty
-		if (device.controlTransfers.push(nvic::Guard(USB_IRQn), *this))
-			usbReceive(0);
+        // add to list of pending transfers and start immediately if list was empty
+        if (device.controlTransfers_.push(nvic::Guard(usbd::irq), *this))
+            usbd::instance().rxStart(0);
 
-		// now wait for data arriving from host
-	} else {
-		// write/IN
-		this->transferEnd = this->p.data + this->p.size;
-		if (device.controlMode != UsbDevice_USB::Mode::DATA_IN) {
-			assert(false);
-			return false;
-		}
+        // now wait for data arriving from host
+    } else {
+        // write/IN
+        if (device.controlMode_ != UsbDevice_USB::Mode::DATA_IN) {
+            assert(false);
+            return false;
+        }
 
-		// add to list of pending transfers and start immediately if list was empty
-		if (device.controlTransfers.push(nvic::Guard(USB_IRQn), *this))
-			startWrite();
-	}
+        // add to list of pending transfers and start immediately if list was empty
+        if (device.controlTransfers_.push(nvic::Guard(usbd::irq), *this))
+            writeFirst();
+    }
 
-	// set state
-	setBusy();
+    // set state
+    setBusy();
 
-	return true;
+    return true;
 }
 
 bool UsbDevice_USB::ControlBufferBase::cancel() {
-	if (this->st.state != State::BUSY)
-		return false;
-	auto &device = this->device;
+    if (st.state != State::BUSY)
+        return false;
+    auto &device = device_;
 
-	// remove from pending transfers even if active
-	device.controlTransfers.remove(nvic::Guard(USB_IRQn), *this);
+    // remove from pending transfers even if active
+    device.controlTransfers_.remove(nvic::Guard(usbd::irq), *this);
 
-	// cancel takes effect immediately
-	setReady(0);
-	return true;
+    // cancel takes effect immediately
+    setReady(0);
+    return true;
 }
 
-bool UsbDevice_USB::ControlBufferBase::finishRead() {
-	int ep = 0;
-	auto transferIt = this->transferIt;
-	auto transferEnd = this->transferEnd;
+bool UsbDevice_USB::ControlBufferBase::readNext() {
+    auto usb = usbd::instance();
+    int ep = 0;
+    auto transferIt = transferIt_;
+    auto transferEnd = transferEnd_;
 
-	int received = ENDPOINT_BUFFER_DESCRIPTORS[ep].rx.transferred();
-	int toCopy = std::min(received, int(transferEnd - transferIt));
-	usbFinishReceive(ep, transferIt, toCopy);
-	transferIt += toCopy;
+    int copied = usb.rx(ep, (uint32_t *)transferIt, int(transferEnd - transferIt));
+    transferIt += copied;
 
-	if (transferIt < transferEnd && received >= BUFFER_SIZE) {
-		// more to read
-		this->transferIt = transferIt;
+    if (transferIt < transferEnd && copied >= BUFFER_SIZE) {
+        // more to read
+        transferIt_ = transferIt;
 
-		// wait for next control OUT transfer (host writes)
-		usbReceive(ep);
+        // wait for next control OUT transfer (host writes)
+        usb.rxStart(ep);
 
-		// not finished yet
-		return false;
-	}
+        // not finished yet
+        return false;
+    }
 
-	// read operation has finished: set number of transferred bytes
-	this->p.size = transferIt - this->p.data;
+    // read operation has finished: set number of transferred bytes
+    size_ = transferIt - data_;
 
-	if ((this->op & Op::PARTIAL) == 0) {
-		// enter status stage by sending ZLP of opposite direction
-		usbControlStatusIn();
-		this->device.controlMode = UsbDevice_USB::Mode::STATUS;
-	}
+    if ((op_ & Op::PARTIAL) == 0) {
+        // enter status stage by sending ZLP of opposite direction
+        usb.controlStatusIn();
+        device_.controlMode_ = UsbDevice_USB::Mode::STATUS;
+    }
 
-	// push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-	this->device.loop.push(*this);
+    // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+    device_.loop_.push(*this);
 
-	// finished
-	return true;
+    // finished
+    return true;
 }
 
-void UsbDevice_USB::ControlBufferBase::startWrite() {
-	int ep = 0;
-	int toWrite = std::min(int(this->transferEnd - this->transferIt), BUFFER_SIZE);
-	usbSend(ep, this->transferIt, toWrite);
+void UsbDevice_USB::ControlBufferBase::writeFirst() {
+    auto usb = usbd::instance();
+    int ep = 0;
+    int toWrite = std::min(int(transferEnd_ - transferIt_), BUFFER_SIZE);
+    //debug::out << "tx " << dec(toWrite) << '\n';
+    usb.tx(ep, (uint32_t *)transferIt_, toWrite);
 
-	// now wait for USB_EP_CTR_TX
+    // now wait for interrupt
 }
 
-bool UsbDevice_USB::ControlBufferBase::finishWrite() {
-	int ep = 0;
-	int transferred = ENDPOINT_BUFFER_DESCRIPTORS[ep].tx.size;
-	auto transferIt = this->transferIt + transferred;
-	auto transferEnd = this->transferEnd;
-	bool partial = (this->op & Op::PARTIAL) != 0;
+bool UsbDevice_USB::ControlBufferBase::writeNext() {
+    auto usb = usbd::instance();
+    auto transferIt = transferIt_;
+    auto transferEnd = transferEnd_;
+    int transferred = std::min(int(transferEnd - transferIt), BUFFER_SIZE);
+    transferIt += transferred;
+    bool partial = (op_ & Op::PARTIAL) != 0;
 
-	// check if more to write or a zero packet is needed
-	if (transferIt < transferEnd || (!partial && transferred == BUFFER_SIZE)) {
-		// more to write or write zero packet
-		this->transferIt = transferIt;
-		this->startWrite();
+    // check if more to write or a zero packet is needed
+    if (transferIt < transferEnd || (!partial && transferred == BUFFER_SIZE)) {
+        // more to write or write zero packet
+        transferIt_ = transferIt;
+        writeFirst();
 
-		// not finished yet
-		return false;
-	}
+        // not finished yet
+        return false;
+    }
 
-	// write operation has finished: set number of transferred bytes
-	this->p.size = transferIt - this->p.data;
+    // write operation has finished: set number of transferred bytes
+    size_ = transferIt - data_;
 
-	if (!partial) {
-		// enter status stage by sending ZLP of opposite direction
-		usbControlStatusOut();
-		this->device.controlMode = UsbDevice_USB::Mode::STATUS;
-	}
+    if (!partial) {
+        // enter status stage by sending ZLP of opposite direction
+        usb.controlStatusOut();
+        device_.controlMode_ = UsbDevice_USB::Mode::STATUS;
+    }
 
-	// push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-	this->device.loop.push(*this);
+    // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+    device_.loop_.push(*this);
 
-	// finished
-	return true;
+    // finished
+    return true;
 }
 
 void UsbDevice_USB::ControlBufferBase::handle() {
-	setReady();
+    setReady();
 }
 
 
 // BufferBase
 
 UsbDevice_USB::BufferBase::BufferBase(uint8_t *data, int capacity, Endpoint &endpoint)
-	: Buffer(data, capacity, endpoint.device.stat)
-	, endpoint(endpoint)
+    : Buffer(data, capacity, endpoint.device_.iState_)
+    , endpoint_(endpoint)
 {
-	endpoint.buffers.add(*this);
+    endpoint.buffers_.add(*this);
 }
 
 UsbDevice_USB::BufferBase::~BufferBase() {
 }
 
 bool UsbDevice_USB::BufferBase::start(Op op) {
-	if (this->st.state != State::READY) {
-		assert(this->p.state != State::BUSY);
-		return false;
-	}
+    if (st.state != State::READY) {
+        assert(st.state != State::BUSY);
+        return false;
+    }
+    auto usb = usbd::instance();
 
-	// check if READ or WRITE flag is set
-	assert((op & Op::READ_WRITE) != 0);
-	this->op = op;
+    // check if READ or WRITE flag is set
+    assert((op & Op::READ_WRITE) != 0);
+    op_ = op;
 
-	// start the transfer
-	auto &device = this->endpoint.device;
-	this->transferIt = this->p.data;
-	if ((op & Op::WRITE) == 0) {
-		// read/OUT
-		this->transferEnd = this->p.data + this->p.capacity;
-		int ep = this->endpoint.outIndex;
-		auto &transfer = device.transfers[ep - 1];
+    // start the transfer
+    auto &device = endpoint_.device_;
+    transferIt_ = data_;
+    if ((op & Op::WRITE) == 0) {
+        // read/OUT
+        transferEnd_ = data_ + capacity_;
+        int ep = endpoint_.outIndex_;
+        auto &transfer = device.transfers_[ep - 1];
 
-		// add to list of pending transfers and start immediately if list was empty
-		if (transfer.out.push(nvic::Guard(USB_IRQn), *this)) {
-			// check if a packet is already available
-			if (transfer.outAvailable) {
-				transfer.outAvailable = false;
+        // add to list of pending transfers and start immediately if list was empty
+        if (transfer.out.push(nvic::Guard(usbd::irq), *this)) {
+            // check if a packet is already available
+            if (transfer.outAvailable) {
+                transfer.outAvailable = false;
 
-				// remove from list of pending transfers again if transfer was only one packet
-				transfer.out.pop(
-					[](BufferBase &buffer) {
-						return buffer.finishRead();
-					}
-				);
-			} else if (device.stat == Device::State::READY) {
-				// indicate that we want to receive data from the host
-				usbReceive(ep);
-			}
-		}
+                // remove from list of pending transfers again if transfer was only one packet
+                transfer.out.pop(
+                    [](BufferBase &buffer) {
+                        // returns false if not finished yet
+                        return buffer.readNext();
+                    }
+                );
+            } else if (device.iState_ == Device::State::READY) {
+                // indicate that we want to receive data from the host
+                usb.rxStart(ep);
+            }
+        }
 
-		// now wait for data arriving from host
-	} else {
-		// write/IN
-		this->transferEnd = this->p.data + this->p.size;
-		int ep = this->endpoint.inIndex;
-		auto &transfer = device.transfers[ep - 1];
+        // now wait for data arriving from host
+    } else {
+        // write/IN
+        transferEnd_ = data_ + size_;
+        int ep = endpoint_.inIndex_;
+        auto &transfer = device.transfers_[ep - 1];
 
-		// add to list of pending transfers and start immediately if list was empty
-		if (transfer.in.push(nvic::Guard(USB_IRQn), *this)) {
-			if (device.stat == Device::State::READY)
-				startWrite();
-		}
-	}
+        // add to list of pending transfers and start immediately if list was empty
+        if (transfer.in.push(nvic::Guard(usbd::irq), *this)) {
+            if (device.iState_ == Device::State::READY)
+                writeFirst();
+        }
+    }
 
-	// set state
-	setBusy();
+    // set state
+    setBusy();
 
-	return true;
+    return true;
 }
 
 bool UsbDevice_USB::BufferBase::cancel() {
-	if (this->st.state != State::BUSY)
-		return false;
-	auto &device = this->endpoint.device;
+    if (st.state != State::BUSY)
+        return false;
+    auto &device = endpoint_.device_;
 
-	// remove from pending transfers even if active
-	device.transfers[this->endpoint.inIndex - 1].in.remove(nvic::Guard(USB_IRQn), *this);
-	device.transfers[this->endpoint.outIndex - 1].out.remove(nvic::Guard(USB_IRQn), *this);
+    // remove from pending transfers even if active
+    device.transfers_[endpoint_.inIndex_ - 1].in.remove(nvic::Guard(usbd::irq), *this);
+    device.transfers_[endpoint_.outIndex_ - 1].out.remove(nvic::Guard(usbd::irq), *this);
 
-	// cancel takes effect immediately
-	setReady(0);
-	return true;
+    // cancel takes effect immediately
+    setReady(0);
+    return true;
 }
 
-bool UsbDevice_USB::BufferBase::finishRead() {
-	int ep = this->endpoint.outIndex;
-	auto transferIt = this->transferIt;
-	auto transferEnd = this->transferEnd;
+bool UsbDevice_USB::BufferBase::readNext() {
+    auto usb = usbd::instance();
+    int ep = endpoint_.outIndex_;
+    auto transferIt = transferIt_;
+    auto transferEnd = transferEnd_;
 
-	int received = ENDPOINT_BUFFER_DESCRIPTORS[ep].rx.transferred();
-	int toCopy = std::min(received, int(transferEnd - transferIt));
-	usbFinishReceive(ep, transferIt, toCopy);
-	transferIt += toCopy;
+    int copied = usb.rx(ep, (uint32_t *)transferIt, int(transferEnd - transferIt));
+    transferIt += copied;
 
-	if (transferIt < transferEnd && received >= BUFFER_SIZE) {
-		// more to read
-		this->transferIt = transferIt;
+    if (transferIt < transferEnd && copied >= BUFFER_SIZE) {
+        // more to read
+        transferIt_ = transferIt;
 
-		// wait for next control OUT transfer (host writes)
-		usbReceive(ep);
+        // wait for next OUT transfer (host writes)
+        usb.rxStart(ep);
 
-		// not finished yet
-		return false;
-	}
+        // not finished yet
+        return false;
+    }
 
-	// read operation has finished: set number of transferred bytes
-	this->p.size = transferIt - this->p.data;
+    // read operation has finished: set number of transferred bytes
+    size_ = transferIt - data_;
 
-	// push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-	this->endpoint.device.loop.push(*this);
+    // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+    endpoint_.device_.loop_.push(*this);
 
-	// finished
-	return true;
+    // finished
+    return true;
 }
 
-void UsbDevice_USB::BufferBase::startWrite() {
-	int ep = this->endpoint.inIndex;
-	int toWrite = std::min(int(this->transferEnd - this->transferIt), BUFFER_SIZE);
-	usbSend(ep, this->transferIt, toWrite);
+void UsbDevice_USB::BufferBase::writeFirst() {
+    auto usb = usbd::instance();
+    int ep = endpoint_.inIndex_;
+    int toWrite = std::min(int(transferEnd_ - transferIt_), BUFFER_SIZE);
+    usb.tx(ep, (uint32_t *)transferIt_, toWrite);
 
-	// now wait for USB_EP_CTR_TX
+    // now wait for interrupt
 }
 
 // always called from interrupt
-bool UsbDevice_USB::BufferBase::finishWrite() {
-	int ep = this->endpoint.inIndex;
-	int transferred = ENDPOINT_BUFFER_DESCRIPTORS[ep].tx.size;
-	auto transferIt = this->transferIt + transferred;
-	auto transferEnd = this->transferEnd;
+bool UsbDevice_USB::BufferBase::writeNext() {
+    auto usb = usbd::instance();
+    auto transferIt = transferIt_;
+    auto transferEnd = transferEnd_;
+    int transferred = std::min(int(transferEnd - transferIt), BUFFER_SIZE);
+    transferIt += transferred;
 
-	// check if more to write or a zero packet is needed
-	if (transferIt < transferEnd || ((this->op & Op::PARTIAL) == 0 && transferred == BUFFER_SIZE)) {
-		// more to write or write zero packet
-		this->transferIt = transferIt;
-		this->startWrite();
+    // check if more to write or a zero packet is needed
+    if (transferIt < transferEnd || ((op_ & Op::PARTIAL) == 0 && transferred == BUFFER_SIZE)) {
+        // more to write or write zero packet
+        transferIt_ = transferIt;
+        writeFirst();
 
-		// not finished yet
-		return false;
-	}
+        // not finished yet
+        return false;
+    }
 
-	// write operation has finished
+    // write operation has finished
 
-	if ((this->op & Op::READ) != 0) {
-		// read/OUT after write
-		auto &device = this->endpoint.device;
-		this->transferEnd = this->p.data + this->p.capacity;
-		int ep = this->endpoint.outIndex;
-		auto &transfer = device.transfers[ep - 1];
+    if ((op_ & Op::READ) != 0) {
+        // read/OUT after write
+        auto &device = endpoint_.device_;
+        transferEnd_ = data_ + capacity_;
+        int ep = endpoint_.outIndex_;
+        auto &transfer = device.transfers_[ep - 1];
 
-		// add to list of pending transfers and start immediately if list was empty
-		if (transfer.out.push(*this)) { // disable interrupt not necessary as finishWrite() is always called from interrupt
-			// check if a packet is already available
-			if (transfer.outAvailable) {
-				transfer.outAvailable = false;
+        // add to list of pending transfers and start immediately if list was empty
+        if (transfer.out.push(*this)) { // disable interrupt not necessary as writeNext() is always called from interrupt
+            // check if a packet is already available
+            if (transfer.outAvailable) {
+                transfer.outAvailable = false;
 
-				// remove from list of pending transfers again if packet was available
-				transfer.out.pop(
-					[](BufferBase &buffer) {
-						return buffer.finishRead();
-					}
-				);
-			} else if (device.stat == Device::State::READY) {
-				// indicate that we want to receive data from the host
-				usbReceive(ep);
-			}
-		}
-	} else {
-		// set number of transferred bytes
-		this->p.size = transferIt - this->p.data;
+                // remove from list of pending transfers again if packet was available
+                transfer.out.pop(
+                    [](BufferBase &buffer) {
+                        // returns false if not finished yet
+                        return buffer.readNext();
+                    }
+                );
+            } else if (device.iState_ == Device::State::READY) {
+                // indicate that we want to receive data from the host
+                usb.rxStart(ep);
+            }
+        }
+    } else {
+        // set number of transferred bytes
+        size_ = transferIt - data_;
 
-		// push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-		this->endpoint.device.loop.push(*this);
-	}
+        // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+        endpoint_.device_.loop_.push(*this);
+    }
 
-	// finished
-	return true;
+    // finished
+    return true;
 }
 
 void UsbDevice_USB::BufferBase::handle() {
-	setReady();
+    setReady();
 }
 
 
 // Endpoint
 
-UsbDevice_USB::Endpoint::Endpoint(UsbDevice_USB &device, int inIndex, int outIndex, EndpointType type)
-	: BufferDevice(device.st.state)
-	, device(device), inIndex(inIndex), outIndex(outIndex), type(type)
+UsbDevice_USB::Endpoint::Endpoint(UsbDevice_USB &device, int inIndex, int outIndex, usbd::EndpointType type)
+    : BufferDevice(device.st.state)
+    , device_(device), inIndex_(inIndex), outIndex_(outIndex), type_(type)
 {
-	device.endpoints.add(*this);
+    device.endpoints_.add(*this);
 }
 
 UsbDevice_USB::Endpoint::~Endpoint() {
 }
 
-//StateTasks<const Device::State, Device::Events> &UsbDevice_USB::Endpoint::getStateTasks() {
-//	return makeConst(this->device.st);
-//}
-
-/*BufferDevice::State UsbDevice_USB::Endpoint::state() {
-	return this->device.stat;
-}
-
-Awaitable<Device::Condition> UsbDevice_USB::Endpoint::until(Condition condition) {
-	// check if IN_* condition is met
-	if ((int(condition) >> int(this->device.stat.load())) & 1)
-		return {}; // don't wait
-	return {this->device.stateTasks, condition};
-}*/
-
 int UsbDevice_USB::Endpoint::getBufferCount() {
-	return this->buffers.count();
+    return buffers_.count();
 }
 
 UsbDevice_USB::BufferBase &UsbDevice_USB::Endpoint::getBuffer(int index) {
-	return this->buffers.get(index);
+    return buffers_.get(index);
 }
 
 } // namespace coco
-#endif
+
+#endif // HAVE_USBD
