@@ -32,7 +32,7 @@ public:
         ~ControlBuffer() override;
 
         // Buffer methods
-        bool start(Op op) override;
+        bool start() override;
         bool cancel() override;
 
     protected:
@@ -51,7 +51,7 @@ public:
         ~Buffer() override;
 
         // Buffer methods
-        bool start(Op op) override;
+        bool start() override;
         bool cancel() override;
 
     protected:

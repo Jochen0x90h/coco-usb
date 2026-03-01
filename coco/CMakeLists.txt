@@ -4,8 +4,7 @@ target_sources(${PROJECT_NAME}
     PUBLIC FILE_SET headers TYPE HEADERS FILES
         usb.hpp
         UsbDevice.hpp
-    PRIVATE
-        UsbDevice.cpp
+        UsbHostDevice.hpp
 )
 
 if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")

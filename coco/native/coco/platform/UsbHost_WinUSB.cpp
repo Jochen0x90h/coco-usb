@@ -35,7 +35,6 @@ static int parseHex(const char *s) {
 }*/
 
 void UsbHost_WinUSB::handle() {
-    //time = loop.now() + 1s;
     loop_.invoke(callback_, 1s);
 
     // enumerate devices
@@ -94,16 +93,15 @@ void UsbHost_WinUSB::handle() {
 
             // now check if a filter of a device accepts the device descriptor
             for (Device &device : devices_) {
-                if (device.st.state == Device::State::OPENING && device.filter_(deviceDescriptor)) {
+                if (device.state_ == Device::State::OPENING && device.filter_(deviceDescriptor)) {
                     // add file to completion port of event loop
-                    Loop_Win32::CompletionHandler *handler = &device;
                     CreateIoCompletionPort(
                         file,
                         loop_.port,
-                        ULONG_PTR(handler),
+                        ULONG_PTR(&reinterpret_cast<Loop_Win32::CompletionHandler &>(device)),
                         0);
 
-                    // set device to map and store the iterator
+                    // set device to map and store the iterator to be able to erase the device in disconnect()
                     it->second = &device;
                     device.it_ = it;
 
@@ -117,6 +115,7 @@ void UsbHost_WinUSB::handle() {
                 }
             }
 
+            // device was not accepted by any filter, close file and free interface
             if (file != INVALID_HANDLE_VALUE) {
                 WinUsb_Free(interface);
                 CloseHandle(file);
@@ -140,7 +139,7 @@ void UsbHost_WinUSB::handle() {
 // Device
 
 UsbHost_WinUSB::Device::Device(UsbHost_WinUSB &host, std::function<bool (const usb::DeviceDescriptor &)> filter)
-    : coco::Device(State::OPENING), host_(host), filter_(filter)
+    : UsbHostDevice(State::DISABLED), host_(host), filter_(filter)
 {
     host.devices_.add(*this);
 }
@@ -148,6 +147,13 @@ UsbHost_WinUSB::Device::Device(UsbHost_WinUSB &host, std::function<bool (const u
 UsbHost_WinUSB::Device::~Device() {
     WinUsb_Free(interface_);
     CloseHandle(file_);
+}
+
+void UsbHost_WinUSB::Device::open() {
+    if (state_ == State::DISABLED) {
+        state_ = State::OPENING;
+        notify(Events::ENTER_OPENING);
+    }
 }
 
 /*
@@ -209,22 +215,29 @@ void UsbHost_WinUSB::Device::connect(HANDLE file, void *interface) {
     }
 */
 
-    // start pending transfers
-    for (auto &buffer : controlTransfers_) {
-        buffer.start();
+    // set state of device and buffers to READY
+    state_ = State::READY;
+    for (auto &buffer : controlBuffers_) {
+        buffer.setSuccess(0);
+        buffer.setReady();
     }
-    for (auto &buffer : transfers_) {
-        buffer.start();
+    for (auto &endpoint : endpoints_) {
+        endpoint.state_ = State::READY;
+        for (auto &buffer : endpoint.buffers_) {
+            buffer.setSuccess(0);
+            buffer.setReady();
+        }
+
+        // resume coroutines waiting for state change
+        endpoint.notify(Events::ENTER_READY);
     }
 
-    // set state and resume all coroutines waiting for state change
-    for (auto &endpoint : endpoints_)
-        endpoint.st.set(State::READY).notify(Events::ENTER_READY);
-    st.set(State::READY).notify(Events::ENTER_READY);
+    // resume coroutines waiting for state change
+    notify(Events::ENTER_READY);
 }
 
 void UsbHost_WinUSB::Device::disconnect() {
-    if (st.state == Device::State::READY) {
+    if (state_ == Device::State::READY) {
         flag_ = false;
         WinUsb_Free(interface_);
         CloseHandle(file_);
@@ -234,44 +247,42 @@ void UsbHost_WinUSB::Device::disconnect() {
         // erase from device map of host
         host_.deviceInfos_.erase(it_);
 
-
-        // set state of buffers to disabled
+        // set state of device to CLOSING and state of buffers to DISABLED
+        state_ = State::DISABLED;
         for (auto &buffer : controlBuffers_) {
             buffer.setDisabled();
         }
         for (auto &endpoint : endpoints_) {
+            endpoint.state_ = State::DISABLED;
             for (auto &buffer : endpoint.buffers_) {
                 buffer.setDisabled();
             }
+
+            // resume coroutines waiting for state change
+            endpoint.notify(Events::ENTER_CLOSING | Events::ENTER_DISABLED);
         }
 
-        // set state and resume coroutines waiting for state change
-        for (auto &endpoint : endpoints_)
-            endpoint.st.set(State::CLOSING).notify(Events::ENTER_CLOSING);
-        st.set(State::CLOSING).notify(Events::ENTER_CLOSING);
-
-
-        // the host device immediately goes to OPENING state to wait for reconnection of the USB device
-
-        // set state of buffers to ready
-        for (auto &buffer : controlBuffers_) {
-            buffer.setReady();
-        }
-        for (auto &endpoint : endpoints_) {
-            for (auto &buffer : endpoint.buffers_) {
-                buffer.setReady();
-            }
-        }
-
-        // set state and resume coroutines waiting for state change
-        for (auto &endpoint : endpoints_)
-            endpoint.st.set(State::OPENING).notify(Events::ENTER_OPENING);
-        st.set(State::OPENING).notify(Events::ENTER_OPENING);
+        // resume coroutines waiting for state change
+        notify(Events::ENTER_CLOSING | Events::ENTER_DISABLED);
     }
 }
 
 void UsbHost_WinUSB::Device::handle(OVERLAPPED *overlapped) {
-    for (auto &buffer : controlTransfers_) {
+    for (auto &buffer : controlBuffers_) {
+        if (overlapped == &buffer.overlapped_) {
+            buffer.handle(overlapped);
+            return;
+        }
+    }
+    for (auto &endpoint : endpoints_) {
+        for (auto &buffer : endpoint.buffers_) {
+            if (overlapped == &buffer.overlapped_[buffer.index_]) {
+                buffer.handle(overlapped);
+                return;
+            }
+        }
+    }
+    /*for (auto &buffer : controlTransfers_) {
         if (overlapped == &buffer.overlapped_) {
             buffer.handle(overlapped);
             return;
@@ -282,14 +293,14 @@ void UsbHost_WinUSB::Device::handle(OVERLAPPED *overlapped) {
             buffer.handle(overlapped);
             return;
         }
-    }
+    }*/
 }
 
 
 // ControlBuffer
 
 UsbHost_WinUSB::ControlBuffer::ControlBuffer(int capacity, Device &device)
-    : Buffer(&setup_, sizeof(WINUSB_SETUP_PACKET), 0, new uint8_t[capacity], capacity, device.st.state)
+    : Buffer(&setup_, sizeof(WINUSB_SETUP_PACKET), new uint8_t[capacity], capacity, device.state_)
     , device_(device)
 {
     device.controlBuffers_.add(*this);
@@ -299,18 +310,22 @@ UsbHost_WinUSB::ControlBuffer::~ControlBuffer() {
     delete [] data_;
 }
 
-bool UsbHost_WinUSB::ControlBuffer::start(Op op) {
-    if (st.state != State::READY) {
-        assert(st.state != State::BUSY);
+bool UsbHost_WinUSB::ControlBuffer::start() {
+    // note the transfer size is 0 for control transfers without data stage
+    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0) {
+        assert(state_ != State::BUSY);
+        setSuccess();
         return false;
     }
 
-    // add to list of pending transfers
-    device_.controlTransfers_.add(*this);
+    steps_ = 1;
 
-    // start if device is ready
-    if (device_.st.state == Device::State::READY)
-        start();
+    // add to list of pending transfers
+    //device_.controlTransfers_.add(*this);
+
+    // start transfer
+    if (!transfer())
+        return false;
 
     // set state
     setBusy();
@@ -319,53 +334,58 @@ bool UsbHost_WinUSB::ControlBuffer::start(Op op) {
 }
 
 bool UsbHost_WinUSB::ControlBuffer::cancel() {
-    if (st.state != State::BUSY)
+    if (state_ != State::BUSY)
         return false;
 
-    // cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
-    auto result = CancelIoEx(device_.file_, &overlapped_);
-    if (!result) {
-        auto e = GetLastError();
-        std::cerr << "cancel error " << e << std::endl;
+    if (steps_ != 0) {
+        // cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
+        auto result = CancelIoEx(device_.file_, &overlapped_);
+        if (!result) {
+            int error = GetLastError();
+            setSystemError(error);
+            return false;
+        }
+        steps_ = 0;
     }
 
     return true;
 }
 
-void UsbHost_WinUSB::ControlBuffer::start() {
+bool UsbHost_WinUSB::ControlBuffer::transfer() {
     memset(&overlapped_, 0, sizeof(OVERLAPPED));
     auto result = WinUsb_ControlTransfer(device_.interface_, setup_, data_, size_, nullptr, &overlapped_);
+    return result;
 }
 
 void UsbHost_WinUSB::ControlBuffer::handle(OVERLAPPED *overlapped) {
     DWORD transferred;
     auto result = GetOverlappedResult(device_.file_, overlapped, &transferred, false);
-    if (!result) {
-        auto error = GetLastError();
-        //if (error != ERROR_IO_INCOMPLETE) {
-            // "real" error or cancelled (ERROR_OPERATION_ABORTED): return zero
-            transferred = 0;
-            result = true;
-
-            // check if the USB device was disconnected
-            if (error == ERROR_GEN_FAILURE)
-                device_.disconnect();
-        //}
-    }
     if (result) {
-        // remove from list of active transfers
-        remove2();
+        // success
+        setSuccess(transferred);
+    } else {
+        // error
+        // canceled: ERROR_OPERATION_ABORTED
+        auto error = GetLastError();
+        setSystemError(error);
 
-        // transfer finished
-        setReady(transferred);
+        // check if the USB device was disconnected
+        if (error == ERROR_GEN_FAILURE)
+            device_.disconnect();
     }
+
+    // remove from list of active transfers
+    //remove2();
+
+    // transfer finished
+    setReady();
 }
 
 
 // Buffer
 
 UsbHost_WinUSB::Buffer::Buffer(int capacity, Endpoint &endpoint)
-    : coco::Buffer(new uint8_t[capacity], capacity, endpoint.device_.st.state)
+    : coco::Buffer(new uint8_t[capacity], capacity, endpoint.device_.state_)
     , endpoint_(endpoint)
 {
     endpoint.buffers_.add(*this);
@@ -375,24 +395,23 @@ UsbHost_WinUSB::Buffer::~Buffer() {
     delete [] data_;
 }
 
-bool UsbHost_WinUSB::Buffer::start(Op op) {
-    if (st.state != State::READY) {
-        assert(st.state != State::BUSY);
+bool UsbHost_WinUSB::Buffer::start() {
+    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+        assert(state_ != State::BUSY);
+        setSuccess();
         return false;
     }
-
-    // check if READ or WRITE flag is set
-    assert((op & Op::READ_WRITE) != 0);
-    op_ = op;
 
     auto &device = endpoint_.device_;
 
     // add to list of pending transfers
-    device.transfers_.add(*this);
+    //device.transfers_.add(*this);
 
-    // start if device is ready
-    if (device.st.state == Device::State::READY)
-        start();
+    steps_ = int(op_ & Op::READ_WRITE);
+
+    // start transfer
+    if (!transfer())
+        return false;
 
     // set state
     setBusy();
@@ -401,29 +420,33 @@ bool UsbHost_WinUSB::Buffer::start(Op op) {
 }
 
 bool UsbHost_WinUSB::Buffer::cancel() {
-    if (st.state != State::BUSY)
+    if (state_ != State::BUSY)
         return false;
 
-    // cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
-    for (int i = index_; i >= 0; --i) {
-        auto result = CancelIoEx(endpoint_.device_.file_, &overlapped_[i]);
-        if (!result) {
-            auto e = GetLastError();
-            std::cerr << "cancel error " << e << std::endl;
+    if (steps_ != 0) {
+        // cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
+        for (int i = index_; i >= 0; --i) {
+            auto result = CancelIoEx(endpoint_.device_.file_, &overlapped_[i]);
+            if (!result) {
+                int error = GetLastError();
+                setSystemError(error);
+                return false;
+            }
         }
+        steps_ = 0;
     }
 
     return true;
 }
 
-void UsbHost_WinUSB::Buffer::start() {
+bool UsbHost_WinUSB::Buffer::transfer() {
     auto &device = endpoint_.device_;
     memset(&overlapped_[0], 0, sizeof(OVERLAPPED));
     int index = 0;
     auto data = data_;
-    if ((op_ & Op::WRITE) == 0) {
+    if ((Op(steps_) & Op::WRITE) == 0) {
         // read
-        op_ = Op::NONE;
+        //op_ = Op::NONE;
         int size = capacity_;
         auto result = WinUsb_ReadPipe(device.interface_, endpoint_.inAddress_, data, size,
             nullptr, &overlapped_[0]);
@@ -449,49 +472,46 @@ void UsbHost_WinUSB::Buffer::start() {
     }
     index_ = index;
     size_ = 0;
+    return true;
 }
 
 void UsbHost_WinUSB::Buffer::handle(OVERLAPPED *overlapped) {
     auto &device = endpoint_.device_;
     DWORD transferred;
     auto result = GetOverlappedResult(device.file_, overlapped, &transferred, false);
-    if (!result) {
-        // "real" error or cancelled (ERROR_OPERATION_ABORTED): return zero size
-        auto error = GetLastError();
-
-        // check if the USB device was disconnected
-        if (error == ERROR_GEN_FAILURE)
-            device.disconnect();
-
-        // remove from list of active transfers
-        remove2();
-
-        // transfer finished
-        setReady(0);
-    } else {
+    if (result) {
         // transfer OK
         if (index_ > 0) {
             // need to wait for completion of the zero packet
             index_ = 0;
             size_ = transferred;
-        } else {
-            if ((op_ & Op::READ) != 0) {
-                // read after write
-                op_ = Op::NONE;
-                auto data = data_;
-                int size = capacity_;
-                result = WinUsb_ReadPipe(device.interface_, endpoint_.inAddress_, data, size,
-                    nullptr, &overlapped_[0]);
-                size_ = 0;
-            } else {
-                // remove from list of active transfers
-                remove2();
-
-                // transfer finished
-                setReady(size_ + transferred);
-            }
+            return;
         }
+        if (Op(steps_) == Op::READ_WRITE) {
+            // read after write
+            steps_ = int(Op::READ);
+            transfer();
+            return;
+        }
+
+        // transfer finished
+        setSuccess(size_ + transferred);
+    } else {
+        // error
+        // canceled: ERROR_OPERATION_ABORTED
+        auto error = GetLastError();
+        setSystemError(error);
+
+        // check if the USB device was disconnected
+        if (error == ERROR_GEN_FAILURE)
+            device.disconnect();
     }
+
+    // remove from list of active transfers
+    //remove2();
+
+    // transfer finished
+    setReady();
 }
 
 

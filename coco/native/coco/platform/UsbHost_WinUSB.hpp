@@ -1,7 +1,8 @@
 #pragma once
 
-#include <coco/usb.hpp>
 #include <coco/BufferDevice.hpp>
+#include <coco/UsbHostDevice.hpp>
+#include <coco/usb.hpp>
 #include <coco/platform/Loop_Win32.hpp> // includes Windows.h
 #include <winusb.h>
 #include <string>
@@ -30,11 +31,11 @@ public:
         ~ControlBuffer() override;
 
         // Buffer methods
-        bool start(Op op) override;
+        bool start() override;
         bool cancel() override;
 
     protected:
-        void start();
+        bool transfer();
         void handle(OVERLAPPED *overlapped);
 
         Device &device_;
@@ -47,18 +48,18 @@ public:
 
     /// @brief Buffer for transferring data to/from an endpoint
     ///
-    class Buffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
+    class Buffer : public coco::Buffer, public IntrusiveListNode {//, public IntrusiveListNode2 {
         friend class UsbHost_WinUSB::Device;
     public:
         Buffer(int capacity, Endpoint &endpoint);
         ~Buffer() override;
 
         // Buffer methods
-        bool start(Op op) override;
+        bool start() override;
         bool cancel() override;
 
     protected:
-        void start();
+        bool transfer();
         void handle(OVERLAPPED *overlapped);
 
         Endpoint &endpoint_;
@@ -91,19 +92,22 @@ public:
         IntrusiveList<Buffer> buffers_;
     };
 
-    /// @brief USB device as seen by the host. Connects itself to an actual USB device when it is plugged in and the
-    /// filter on the device descriptor returns true.
-    class Device : public coco::Device, public Loop_Win32::CompletionHandler, public IntrusiveListNode {
+    /// @brief USB device as seen by the host.
+    /// Connects itself to an actual USB device when it is plugged in and the filter on the device descriptor returns
+    /// true.
+    class Device : public UsbHostDevice, public Loop_Win32::CompletionHandler, public IntrusiveListNode {
         friend class UsbHost_WinUSB;
     public:
-        /// @brief Constructor
+        /// @brief Constructor.
         /// @param host usb host
-        /// @param filter filter to indicate if an usb device is handled by this device instance
+        /// @param filter Filter to indicate if an usb device is handled by this device instance
         Device(UsbHost_WinUSB &host, std::function<bool (const usb::DeviceDescriptor &)> filter);
 
         ~Device() override;
 
         //void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
+
+        void open() override;
 
     protected:
         void connect(HANDLE file, void *interface);
@@ -128,8 +132,8 @@ public:
         IntrusiveList<Endpoint> endpoints_;
 
         // pending transfers (needed to queue transfers when device is in OPENING or PAUSE state)
-        IntrusiveList2<ControlBuffer> controlTransfers_;
-        IntrusiveList2<Buffer> transfers_;
+        //IntrusiveList2<ControlBuffer> controlTransfers_;
+        //IntrusiveList2<Buffer> transfers_;
     };
 
 protected:

@@ -17,8 +17,7 @@ public:
     /// @brief Wait for a request to the device (e.g. control request for USB)
     /// @return use co_await on return value to wait until the device receives a request
     [[nodiscard]] Awaitable<Events> untilRequest() {
-        //auto &st = getStateTasks();
-        return {this->st.tasks, Events::REQUEST};
+        return {this->tasks_, Events::REQUEST};
     }
 
     /// @brief Get the current setup packet. Call after waiting for a request (co_await device.untilRequest();)

@@ -248,22 +248,27 @@ Coroutine control(UsbDevice &usb, Buffer &buffer) {
                 // acknowledge when reading no data from control endpoint
                 usb.acknowledge();
                 debug::setRed(setup.wValue != 0);
+                debug::out << "red: " << dec(setup.wValue != 0) << '\n';
                 break;
             case VendorRequest::GREEN:
                 // acknowledge when reading no data from control endpoint
                 usb.acknowledge();
                 debug::setGreen(setup.wIndex != 0);
+                debug::out << "green: " << dec(setup.wIndex != 0) << '\n';
                 break;
             case VendorRequest::BLUE:
                 // acknowledge when reading no data from control endpoint
                 usb.acknowledge();
                 debug::setBlue(setup.wValue == setup.wIndex);
+                debug::out << "blue: " << dec(setup.wValue == setup.wIndex) << '\n';
                 break;
             case VendorRequest::COLOR:
                 {
                     // read color from control endpoint
                     co_await buffer.read(setup.wLength);
-                    debug::set(buffer.array<uint32_t>()[0]);
+                    int color = buffer.array<uint32_t>()[0];
+                    debug::set(color);
+                    debug::out << "color: " << dec(color) << '\n';
                 }
                 break;
             default:

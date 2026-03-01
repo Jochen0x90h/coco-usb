@@ -38,17 +38,20 @@ public:
         ~ControlBufferBase() override;
 
         // Buffer methods
-        bool start(Op op) override;
+        bool start() override;
         bool cancel() override;
 
     protected:
-        bool readNext();
-        void writeFirst();
-        bool writeNext();
+        // read buffer of up to BUFFER_SIZE, returns true when transfer has finished
+        bool readBuffer();
+
+        // write buffer of up to BUFFER_SIZE, returns true when transfer has finished
+        bool writeBuffer();
+
+        // called from event loop to notify app about state changes and control requests
         void handle() override;
 
         UsbDevice_USBD &device_;
-        Op op_;
         uint8_t *transferIt_;
         uint8_t *transferEnd_;
     };
@@ -77,17 +80,20 @@ public:
         ~BufferBase() override;
 
         // Buffer methods
-        bool start(Op op) override;
+        bool start() override;
         bool cancel() override;
 
     protected:
-        bool readNext();
-        void writeFirst();
-        bool writeNext();
+        // read buffer of up to BUFFER_SIZE, returns true when transfer has finished
+        bool readBuffer();
+
+        // write buffer of up to BUFFER_SIZE, returns true when transfer has finished
+        bool writeBuffer();
+
+        // called from event loop to notify app about state changes and control requests
         void handle() override;
 
         Endpoint &endpoint_;
-        Op op_;
         uint8_t *transferIt_;
         uint8_t *transferEnd_;
     };
@@ -135,7 +141,7 @@ protected:
     Loop_Queue &loop_;
 
     // state and events for interrupt handler
-    std::atomic<State> iState_ = State::OPENING; // device is in opening state until it gets configured by the host
+    //std::atomic<State> iState_ = State::OPENING; // device is in opening state until it gets configured by the host
     std::atomic<Events> iEvents_ = Events::NONE;
 
     // list of control buffers
@@ -160,7 +166,7 @@ protected:
     // for each endpont a queue of active in and out transfers
     struct Transfer {
         InterruptQueue<BufferBase> in;
-        bool outAvailable;
+        std::atomic<bool> outAvailable;
         InterruptQueue<BufferBase> out;
     };
     Transfer bulkTransfers_[7];

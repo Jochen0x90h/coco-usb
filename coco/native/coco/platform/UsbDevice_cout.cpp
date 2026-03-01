@@ -25,6 +25,7 @@ void UsbDevice_cout::acknowledge() {
 void UsbDevice_cout::stall() {
 }
 
+// coroutine that simulates reading descriptors
 Coroutine UsbDevice_cout::readDescriptors() {
     co_await loop_.yield();
 
@@ -35,7 +36,7 @@ Coroutine UsbDevice_cout::readDescriptors() {
         uint16_t(int(usb::DescriptorType::DEVICE) << 8),
         0,
         sizeof(usb::DeviceDescriptor)};
-    st.notify(Events::REQUEST);
+    notify(Events::REQUEST);
     co_await loop_.yield();
 
     // get WinUSB descriptor
@@ -45,19 +46,23 @@ Coroutine UsbDevice_cout::readDescriptors() {
         0,
         0x07,
         256};
-    st.notify(Events::REQUEST);
+    notify(Events::REQUEST);
     co_await loop_.yield();
 
-    // set ready and resume all coroutines waiting for state change
-    st.set(State::READY);
+    // set state of device and buffers to READY
+    state_ = State::READY;
     for (auto &endpoint : endpoints_) {
-        endpoint.st.set(State::READY);
+        endpoint.state_ = State::READY;
         for (auto &buffer : endpoint.buffers_) {
-            buffer.st.set(Buffer::State::READY).notify(Buffer::Events::ENTER_READY);
+            buffer.setReady();
         }
-        endpoint.st.notify(Events::ENTER_READY);
+
+        // resume coroutines waiting for state change
+        endpoint.notify(Events::ENTER_READY);
     }
-    st.notify(Events::ENTER_READY);
+
+    // resume coroutines waiting for state change
+    notify(Events::ENTER_READY);
 
     // invoke handle() when transfers are pending
     if (!transfers_.empty())
@@ -94,7 +99,7 @@ void UsbDevice_cout::handle() {
     }
 
     // check if there is a pending bulk transfer
-    if (st.state == State::READY) {
+    if (state_ == State::READY) {
         for (auto &buffer : transfers_) {
             int endpointIndex = buffer.endpoint_.index_;
 
@@ -128,7 +133,7 @@ void UsbDevice_cout::handle() {
     }
 
     // invoke handle() again when there are more pending transfers
-    if (!controlTransfers_.empty() || (!transfers_.empty() && st.state == State::READY))
+    if (!controlTransfers_.empty() || (!transfers_.empty() && state_ == State::READY))
         loop_.invoke(callback_);
 }
 
@@ -136,7 +141,7 @@ void UsbDevice_cout::handle() {
 // ControlBuffer
 
 UsbDevice_cout::ControlBuffer::ControlBuffer(int capacity, UsbDevice_cout &device)
-    : coco::Buffer(new uint8_t[capacity], capacity, device.st.state)
+    : coco::Buffer(new uint8_t[capacity], capacity, device.state_)
     , device_(device)
 {
     device.controlBuffers_.add(*this);
@@ -146,16 +151,12 @@ UsbDevice_cout::ControlBuffer::~ControlBuffer() {
     delete [] data_;
 }
 
-bool UsbDevice_cout::ControlBuffer::start(Op op) {
-    if (st.state != State::READY) {
-        assert(st.state != State::BUSY);
+bool UsbDevice_cout::ControlBuffer::start() {
+    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+        assert(state_ != State::BUSY);
+        setSuccess();
         return false;
     }
-
-    // check if READ or WRITE flag is set
-    assert((op & Op::READ_WRITE) != 0);
-
-    //xferred = size;
 
     auto &device = device_;
 
@@ -169,13 +170,14 @@ bool UsbDevice_cout::ControlBuffer::start(Op op) {
 }
 
 bool UsbDevice_cout::ControlBuffer::cancel() {
-    if (st.state != State::BUSY)
+    if (state_ != State::BUSY)
         return false;
 
     remove2();
 
     // cancel takes effect immediately
-    setReady(0);
+    setError(std::errc::operation_canceled);
+    setReady();
     return true;
 }
 
@@ -183,7 +185,7 @@ bool UsbDevice_cout::ControlBuffer::cancel() {
 // Buffer
 
 UsbDevice_cout::Buffer::Buffer(int capacity, Endpoint &endpoint)
-    : coco::Buffer(new uint8_t[capacity], capacity, endpoint.device_.st.state)
+    : coco::Buffer(new uint8_t[capacity], capacity, endpoint.device_.state_)
     , endpoint_(endpoint)
 {
     endpoint.buffers_.add(*this);
@@ -193,14 +195,12 @@ UsbDevice_cout::Buffer::~Buffer() {
     delete [] data_;
 }
 
-bool UsbDevice_cout::Buffer::start(Op op) {
-    if (st.state != State::READY) {
-        assert(st.state != State::BUSY);
+bool UsbDevice_cout::Buffer::start() {
+    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+        assert(state_ != State::BUSY);
+        setSuccess(0);
         return false;
     }
-
-    // check if READ or WRITE flag is set
-    assert((op & Op::READ_WRITE) != 0);
 
     auto &device = endpoint_.device_;
     device.transfers_.add(*this);
@@ -213,13 +213,14 @@ bool UsbDevice_cout::Buffer::start(Op op) {
 }
 
 bool UsbDevice_cout::Buffer::cancel() {
-    if (st.state != State::BUSY)
+    if (state_ != State::BUSY)
         return false;
 
     remove2();
 
     // cancel takes effect immediately
-    setReady(0);
+    setError(std::errc::operation_canceled);
+    setReady();
     return true;
 }
 

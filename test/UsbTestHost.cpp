@@ -66,21 +66,27 @@ void printStatus(int endpoint, String message, bool ok) {
 }
 
 // test echo coroutine in device (i.e. write to device and check if it returns the same data)
-Coroutine echoTest(Loop &loop, Device &device, Buffer &control, Buffer &buffer, int endpoint) {
+Coroutine echoTest(Loop &loop, UsbHostDevice &device, Buffer &control, Buffer &buffer, int endpoint) {
     while (true) {
+        device.open();
+
         // wait until USB device gets detected (control buffer becomes ready)
         std::cout << "Wait for USB device..." << std::endl;
         co_await device.untilReady();
 
         // test control request
         if (endpoint == 1) {
-            for (int i = 1; i <= 8; ++i)
+            for (int i = 1; i <= 8; ++i) {
                 co_await controlOut(control, Request::COLOR, 0, 256, i);
-            co_await controlOut(control, Request::RED, 1, 0); // set on if wValue != 0
+
+                // wait because otherwise it seems that the control buffer data gets overwritten
+                co_await loop.sleep(50ms);
+            }
+            co_await controlOut(control, Request::RED, 1, 0); // set red on if wValue != 0
             co_await controlOut(control, Request::RED, 0, 0);
-            co_await controlOut(control, Request::GREEN, 0, 1); // set on if wIndex != 0
+            co_await controlOut(control, Request::GREEN, 0, 1); // set green on if wIndex != 0
             co_await controlOut(control, Request::GREEN, 0, 0);
-            co_await controlOut(control, Request::BLUE, 5, 5); // set on if wValue == wIndex
+            co_await controlOut(control, Request::BLUE, 5, 5); // set blue on if wValue == wIndex
             co_await controlOut(control, Request::BLUE, 0, 256);
         }
 
@@ -108,7 +114,7 @@ Coroutine echoTest(Loop &loop, Device &device, Buffer &control, Buffer &buffer, 
             // send to device and receive reply (we get back the same data that we sent)
             //co_await buffer.write(sendLength);
             //co_await buffer.read();
-            co_await buffer.write(sendLength, Buffer::Op::READ);
+            co_await buffer.writeRead(sendLength);
 
             int transferred = buffer.size();
             printStatus(endpoint, "receive", transferred == sendLength);

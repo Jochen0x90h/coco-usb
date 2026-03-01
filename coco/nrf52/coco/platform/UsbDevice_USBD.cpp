@@ -1,4 +1,5 @@
 #include "UsbDevice_USBD.hpp"
+//#include <coco/convert.hpp>
 //#include <coco/debug.hpp>
 #include <coco/platform/nvic.hpp>
 
@@ -132,15 +133,15 @@ void UsbDevice_USBD::USBD_IRQHandler() {
             }
 
             // start IN transfers that are already waiting
-            for (int ep = 1; ep < 8; ++ep) {
+            /*for (int ep = 1; ep < 8; ++ep) {
                 auto &transfers = bulkTransfers_[ep - 1];
                 auto inBuffer = transfers.in.frontOrNull();
                 if (inBuffer != nullptr)
                     inBuffer->writeFirst();
-            }
+            }*/
 
             // set state
-            iState_ = State::READY;
+            //iState_ = State::READY;
 
             // push this to the event handler queue so that the application gets notified about the sate change in UsbDevice_USB::handle()
             Events e = iEvents_;
@@ -172,18 +173,18 @@ void UsbDevice_USBD::USBD_IRQHandler() {
             // control IN transfer completed
             controlTransfers_.pop(
                 [](ControlBufferBase &buffer) {
-                    return buffer.writeNext();
+                    return buffer.writeBuffer();
                 },
                 [](ControlBufferBase &next) {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
-                    next.writeFirst();
+                    next.writeBuffer();
                 }
             );
         } else {
             // control OUT transfer completed
             controlTransfers_.pop(
                 [](ControlBufferBase &buffer) {
-                    return buffer.readNext();
+                    return buffer.readBuffer();
                 },
                 [](ControlBufferBase &next) {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
@@ -221,7 +222,7 @@ void UsbDevice_USBD::USBD_IRQHandler() {
 
                 if (transfer.out.pop(
                     [](BufferBase &buffer) {
-                        return buffer.readNext();
+                        return buffer.readBuffer();
                     },
                     [](BufferBase &next) {
                         // start next buffer
@@ -237,11 +238,11 @@ void UsbDevice_USBD::USBD_IRQHandler() {
 
                 transfer.in.pop(
                     [](BufferBase &buffer) {
-                        return buffer.writeNext();
+                        return buffer.writeBuffer();
                     },
                     [](BufferBase &next) {
                         // start next buffer
-                        next.writeFirst();
+                        next.writeBuffer();
                     }
                 );
             }
@@ -251,6 +252,28 @@ void UsbDevice_USBD::USBD_IRQHandler() {
 
 // called from event loop to notify app about state changes and control requests
 void UsbDevice_USBD::handle() {
+    Events events = iEvents_.exchange(Events::NONE);
+
+    if ((events & Events::ENTER_READY) != 0) {
+        //debug::out << "ready\n";
+        state_ = State::READY;
+
+        // note that the control buffers are always READY so that control requests can be handled
+
+        for (auto &endpoint : endpoints_) {
+            endpoint.state_ = State::READY;
+            for (auto &buffer : endpoint.buffers_) {
+                buffer.state_ = BufferBase::State::READY;
+                buffer.notify(BufferBase::Events::ENTER_READY);
+            }
+            endpoint.notify(Events::ENTER_READY);
+        }
+    }
+
+    // notify REQUEST or ENTER_READY events for the USB device to the application
+    notify(events);
+/*
+
     State state = iState_;
     Events events = iEvents_.exchange(Events::NONE);
 
@@ -260,14 +283,14 @@ void UsbDevice_USBD::handle() {
         for (auto &endpoint : endpoints_)
             endpoint.st.set(state).notify(events);
     }
-    st.notify(events);
+    st.notify(events);*/
 }
 
 
 // ControlBufferBase
 
 UsbDevice_USBD::ControlBufferBase::ControlBufferBase(uint8_t *data, int capacity, UsbDevice_USBD &device)
-    : Buffer(data, capacity, device.iState_)
+    : Buffer(data, capacity, Buffer::State::READY) // control buffers are always READY
     , device_(device)
 {
     device.controlBuffers_.add(*this);
@@ -276,22 +299,19 @@ UsbDevice_USBD::ControlBufferBase::ControlBufferBase(uint8_t *data, int capacity
 UsbDevice_USBD::ControlBufferBase::~ControlBufferBase() {
 }
 
-bool UsbDevice_USBD::ControlBufferBase::start(Op op) {
-    if (st.state != State::READY) {
-        assert(st.state != State::BUSY);
+bool UsbDevice_USBD::ControlBufferBase::start() {
+    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+        assert(state_ != State::BUSY);
+        setSuccess();
         return false;
     }
-
-    // check if READ or WRITE flag is set
-    assert((op & Op::READ_WRITE) != 0);
-    op_ = op;
 
     // start the transfer
     // note that for read transfers no zero length packet follows when last transfer is 64 bytes
     auto &device = device_;
     transferIt_ = data_;
     transferEnd_ = data_ + size_;
-    if ((op & Op::WRITE) == 0) {
+    if ((op_ & Op::WRITE) == 0) {
         // read/OUT
         if (device.controlMode_ != UsbDevice_USBD::Mode::DATA_OUT) {
             assert(false);
@@ -312,7 +332,7 @@ bool UsbDevice_USBD::ControlBufferBase::start(Op op) {
 
         // add to list of pending transfers and start immediately if list was empty
         if (device.controlTransfers_.push(nvic::Guard(USBD_IRQn), *this))
-            writeFirst();
+            writeBuffer();
     }
 
     // set state
@@ -322,7 +342,7 @@ bool UsbDevice_USBD::ControlBufferBase::start(Op op) {
 }
 
 bool UsbDevice_USBD::ControlBufferBase::cancel() {
-    if (st.state != State::BUSY)
+    if (state_ != State::BUSY)
         return false;
     auto &device = device_;
 
@@ -330,11 +350,12 @@ bool UsbDevice_USBD::ControlBufferBase::cancel() {
     device.controlTransfers_.remove(nvic::Guard(USBD_IRQn), *this);
 
     // cancel takes effect immediately
-    setReady(0);
+    setError(std::errc::operation_canceled);
+    setReady();
     return true;
 }
 
-bool UsbDevice_USBD::ControlBufferBase::readNext() {
+bool UsbDevice_USBD::ControlBufferBase::readBuffer() {
     int ep = 0;
     auto transferIt = transferIt_;
     auto transferEnd = transferEnd_;
@@ -382,6 +403,50 @@ bool UsbDevice_USBD::ControlBufferBase::readNext() {
     return true;
 }
 
+bool UsbDevice_USBD::ControlBufferBase::writeBuffer() {
+    bool partial = (op_ & Op::PARTIAL) != 0;
+
+    auto transferIt = transferIt_;
+    int toWrite = std::min(int(transferEnd_ - transferIt), BUFFER_SIZE);
+    if (toWrite > 0 || (partial && toWrite == 0)) {
+        // write data or ZLP
+        int ep = 0;
+
+        NRF_USBD->EPIN[ep].PTR = intptr_t(transferIt);
+        NRF_USBD->EPIN[ep].MAXCNT = toWrite;
+
+        // start DMA transfer from RAM to buffer
+        *(volatile uint32_t *)0x40027C1C = 0x00000082;
+        NRF_USBD->TASKS_STARTEPIN[ep] = TRIGGER; // -> ENDEPIN[i]
+
+        // wait for end of transfer (easy solution and because of errata 199)
+        while (!NRF_USBD->EVENTS_ENDEPIN[ep]);
+        NRF_USBD->EVENTS_ENDEPIN[ep] = 0;
+        *(volatile uint32_t *)0x40027C1C = 0x00000000;
+
+        transferIt_ = transferIt + BUFFER_SIZE;
+
+        // not finished yet -> EVENTS_EP0DATADONE
+        return false;
+    }
+
+    // write operation has finished
+
+    if (!partial) {
+        // enter status stage by sending ZLP of opposite direction (done by hardware)
+        NRF_USBD->TASKS_EP0STATUS = TRIGGER;
+        device_.controlMode_ = UsbDevice_USBD::Mode::IDLE;
+    }
+
+    setSuccess();
+
+    // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+    device_.loop_.push(*this);
+
+    // finished
+    return true;
+}
+/*
 void UsbDevice_USBD::ControlBufferBase::writeFirst() {
     int ep = 0;
     int toWrite = std::min(int(transferEnd_ - transferIt_), BUFFER_SIZE);
@@ -431,7 +496,7 @@ bool UsbDevice_USBD::ControlBufferBase::writeNext() {
 
     // finished
     return true;
-}
+}*/
 
 void UsbDevice_USBD::ControlBufferBase::handle() {
     setReady();
@@ -441,7 +506,7 @@ void UsbDevice_USBD::ControlBufferBase::handle() {
 // BufferBase
 
 UsbDevice_USBD::BufferBase::BufferBase(uint8_t *data, int capacity, Endpoint &endpoint)
-    : Buffer(data, capacity, endpoint.device_.iState_)
+    : Buffer(data, capacity, endpoint.device_.state_)
     , endpoint_(endpoint)
 {
     endpoint.buffers_.add(*this);
@@ -450,20 +515,17 @@ UsbDevice_USBD::BufferBase::BufferBase(uint8_t *data, int capacity, Endpoint &en
 UsbDevice_USBD::BufferBase::~BufferBase() {
 }
 
-bool UsbDevice_USBD::BufferBase::start(Op op) {
-    if (st.state != State::READY) {
-        assert(st.state != State::BUSY);
+bool UsbDevice_USBD::BufferBase::start() {
+    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+        assert(state_ != State::BUSY);
+        setSuccess();
         return false;
     }
-
-    // check if READ or WRITE flag is set
-    assert((op & Op::READ_WRITE) != 0);
-    op_ = op;
 
     // start the transfer
     auto &device = endpoint_.device_;
     transferIt_ = data_;
-    if ((op & Op::WRITE) == 0) {
+    if ((op_ & Op::WRITE) == 0) {
         // read/OUT
         transferEnd_ = data_ + capacity_;
         int ep = endpoint_.outIndex_;
@@ -478,10 +540,10 @@ bool UsbDevice_USBD::BufferBase::start(Op op) {
                 // remove from list of pending transfers again if transfer was only one packet
                 transfer.out.pop(
                     [](BufferBase &buffer) {
-                        return buffer.readNext();
+                        return buffer.readBuffer();
                     }
                 );
-            } else if (device.iState_ == Device::State::READY) {
+            } else {
                 // nothing to do, receive starts automatically
             }
         }
@@ -495,8 +557,7 @@ bool UsbDevice_USBD::BufferBase::start(Op op) {
 
         // add to list of pending transfers and start immediately if list was empty
         if (transfer.in.push(nvic::Guard(USBD_IRQn), *this)) {
-            if (device.iState_ == Device::State::READY)
-                writeFirst();
+            writeBuffer();
         }
     }
 
@@ -507,20 +568,23 @@ bool UsbDevice_USBD::BufferBase::start(Op op) {
 }
 
 bool UsbDevice_USBD::BufferBase::cancel() {
-    if (st.state != State::BUSY)
+    if (state_ != State::BUSY)
         return false;
     auto &device = endpoint_.device_;
 
-    // remove from pending transfers even if active
-    device.bulkTransfers_[endpoint_.inIndex_ - 1].in.remove(nvic::Guard(USBD_IRQn), *this);
+    // read/out: can remove even if active because the next transfer will go into the next buffer or set outAvailable
     device.bulkTransfers_[endpoint_.outIndex_ - 1].out.remove(nvic::Guard(USBD_IRQn), *this);
 
+    // write/in: can remove even if active because next transfer will call write() on next buffer
+    device.bulkTransfers_[endpoint_.inIndex_ - 1].in.remove(nvic::Guard(USBD_IRQn), *this);
+
     // cancel takes effect immediately
-    setReady(0);
+    setError(std::errc::operation_canceled);
+    setReady();
     return true;
 }
 
-bool UsbDevice_USBD::BufferBase::readNext() {
+bool UsbDevice_USBD::BufferBase::readBuffer() {
     int ep = endpoint_.outIndex_;
     auto transferIt = transferIt_;
     auto transferEnd = transferEnd_;
@@ -550,7 +614,7 @@ bool UsbDevice_USBD::BufferBase::readNext() {
     }
 
     // read operation has finished: set number of transferred bytes
-    size_ = transferIt - data_;
+    setSuccess(transferIt - data_);
 
     // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
     endpoint_.device_.loop_.push(*this);
@@ -559,6 +623,69 @@ bool UsbDevice_USBD::BufferBase::readNext() {
     return true;
 }
 
+bool UsbDevice_USBD::BufferBase::writeBuffer() {
+    auto transferIt = transferIt_;
+    int toWrite = std::min(int(transferEnd_ - transferIt), BUFFER_SIZE);
+    if (toWrite > 0 || ((op_ & Op::PARTIAL) == 0 && toWrite == 0)) {
+        // write data or ZLP
+        int ep = endpoint_.inIndex_;
+
+        NRF_USBD->EPIN[ep].PTR = intptr_t(transferIt);
+        NRF_USBD->EPIN[ep].MAXCNT = toWrite;
+
+        // start DMA transfer from RAM to buffer
+        *(volatile uint32_t *)0x40027C1C = 0x00000082;
+        NRF_USBD->TASKS_STARTEPIN[ep] = TRIGGER; // -> ENDEPIN[i]
+
+        // wait for end of transfer (easy solution and because of errata 199)
+        while (!NRF_USBD->EVENTS_ENDEPIN[ep]);
+        NRF_USBD->EVENTS_ENDEPIN[ep] = 0;
+        *(volatile uint32_t *)0x40027C1C = 0x00000000;
+
+        transferIt_ = transferIt + BUFFER_SIZE;
+
+        // not finished yet
+        return false;
+    }
+
+    // write operation has finished
+
+    if ((op_ & Op::READ) != 0) {
+        // read/OUT after write
+        auto &device = endpoint_.device_;
+        transferEnd_ = data_ + capacity_;
+        int ep = endpoint_.outIndex_;
+        auto &transfer = device.bulkTransfers_[ep - 1];
+
+        // add to list of pending transfers and start immediately if list was empty
+        if (transfer.out.push(*this)) { // disable interrupt not necessary as writeNext() is always called from interrupt
+            // check if a packet is already available
+            if (transfer.outAvailable) {
+                transfer.outAvailable = false;
+
+                // remove from list of pending transfers again if packet was available
+                transfer.out.pop(
+                    [](BufferBase &buffer) {
+                        return buffer.readBuffer();
+                    }
+                );
+            } else {
+                // nothing to do, receive starts automatically
+            }
+        }
+    } else {
+        setSuccess();
+
+        // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+        endpoint_.device_.loop_.push(*this);
+    }
+
+    // write finished
+    return true;
+
+}
+
+/*
 void UsbDevice_USBD::BufferBase::writeFirst() {
     int ep = endpoint_.inIndex_;
     int toWrite = std::min(int(transferEnd_ - transferIt_), BUFFER_SIZE);
@@ -629,6 +756,7 @@ bool UsbDevice_USBD::BufferBase::writeNext() {
     // finished
     return true;
 }
+*/
 
 void UsbDevice_USBD::BufferBase::handle() {
     setReady();
@@ -638,7 +766,7 @@ void UsbDevice_USBD::BufferBase::handle() {
 // Endpoint
 
 UsbDevice_USBD::Endpoint::Endpoint(UsbDevice_USBD &device, int inIndex, int outIndex)
-    : BufferDevice(device.st.state)
+    : BufferDevice(device.state_)
     , device_(device), inIndex_(inIndex), outIndex_(outIndex)
 {
     device.endpoints_.add(*this);
