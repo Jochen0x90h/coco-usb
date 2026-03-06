@@ -19,6 +19,7 @@ enum class DescriptorType : uint8_t {
     STRING = 3,
     INTERFACE = 4,
     ENDPOINT = 5,
+    DEVICE_QUALIFIER = 6,
 
     // interface association descriptor type
     // see https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/usb-interface-association-descriptor

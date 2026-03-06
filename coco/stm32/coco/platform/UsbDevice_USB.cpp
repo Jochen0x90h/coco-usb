@@ -23,6 +23,10 @@
 
 namespace coco {
 
+namespace {
+usbd::BufferCapacity defaultBufferCapacity[1] = {{usbd::RxCapacity::_64, 64}};
+}
+
 UsbDevice_USB::UsbDevice_USB(Loop_Queue &loop)
     : UsbDevice(State::OPENING)
     , loop_(loop)
@@ -30,6 +34,7 @@ UsbDevice_USB::UsbDevice_USB(Loop_Queue &loop)
     //debug::out << "UsbDevice_USB\n";
 
     usbd::enableClock()
+        .configure(defaultBufferCapacity)
         .clear(usbd::Status::ALL)
         .enable(usbd::Interrupt::RESET | usbd::Interrupt::CORRECT_TRANSFER);
 
@@ -73,8 +78,7 @@ void UsbDevice_USB::USB_IRQHandler() {
     if ((status & usbd::Status::RESET) != 0) {
         // device was connected to the host
         //debug::out << "connected\n";
-        usbd::BufferCapacity bufferCapacity[1] = {{usbd::RxCapacity::_64, 64}};
-        usb.configure(bufferCapacity);
+        usb.configure(defaultBufferCapacity);
         usb.reset();
     }
 
