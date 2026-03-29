@@ -98,7 +98,7 @@ void UsbHost_WinUSB::handle() {
                     CreateIoCompletionPort(
                         file,
                         loop_.port,
-                        ULONG_PTR(&reinterpret_cast<Loop_Win32::CompletionHandler &>(device)),
+                        ULONG_PTR(&static_cast<Loop_Win32::CompletionHandler &>(device)),
                         0);
 
                     // set device to map and store the iterator to be able to erase the device in disconnect()
@@ -218,13 +218,11 @@ void UsbHost_WinUSB::Device::connect(HANDLE file, void *interface) {
     // set state of device and buffers to READY
     state_ = State::READY;
     for (auto &buffer : controlBuffers_) {
-        buffer.setSuccess(0);
         buffer.setReady();
     }
     for (auto &endpoint : endpoints_) {
         endpoint.state_ = State::READY;
         for (auto &buffer : endpoint.buffers_) {
-            buffer.setSuccess(0);
             buffer.setReady();
         }
 
@@ -312,8 +310,12 @@ UsbHost_WinUSB::ControlBuffer::~ControlBuffer() {
 
 bool UsbHost_WinUSB::ControlBuffer::start() {
     // note the transfer size is 0 for control transfers without data stage
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0) {
         setSuccess();
         return false;
     }
@@ -352,9 +354,21 @@ bool UsbHost_WinUSB::ControlBuffer::cancel() {
 }
 
 bool UsbHost_WinUSB::ControlBuffer::transfer() {
+    DWORD transferred;
     memset(&overlapped_, 0, sizeof(OVERLAPPED));
-    auto result = WinUsb_ControlTransfer(device_.interface_, setup_, data_, size_, nullptr, &overlapped_);
-    return result;
+    auto result = WinUsb_ControlTransfer(device_.interface_, setup_, data_, size_, &transferred, &overlapped_);
+    Sleep(10);
+    if (result != 0) {
+        setSuccess(transferred);
+    } else {
+        int error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            // wait for completion in handle()
+            return true;
+        }
+        setSystemError(error);
+    }
+    return false;
 }
 
 void UsbHost_WinUSB::ControlBuffer::handle(OVERLAPPED *overlapped) {
@@ -396,8 +410,12 @@ UsbHost_WinUSB::Buffer::~Buffer() {
 }
 
 bool UsbHost_WinUSB::Buffer::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
         setSuccess();
         return false;
     }

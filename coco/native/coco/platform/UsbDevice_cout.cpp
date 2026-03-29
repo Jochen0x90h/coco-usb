@@ -78,7 +78,7 @@ void UsbDevice_cout::handle() {
             && setup.bRequest == usb::Request::GET_DESCRIPTOR
             && usb::DescriptorType(setup.wValue >> 8) == usb::DescriptorType::DEVICE)
         {
-            auto &deviceDescriptor = buffer.value<usb::DeviceDescriptor>();
+            auto &deviceDescriptor = buffer.cast<usb::DeviceDescriptor &>();
             text_ = deviceDescriptor.bDeviceProtocol == 1;
         }
 
@@ -152,8 +152,12 @@ UsbDevice_cout::ControlBuffer::~ControlBuffer() {
 }
 
 bool UsbDevice_cout::ControlBuffer::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
         setSuccess();
         return false;
     }
@@ -196,9 +200,13 @@ UsbDevice_cout::Buffer::~Buffer() {
 }
 
 bool UsbDevice_cout::Buffer::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
-        setSuccess(0);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+        setSuccess();
         return false;
     }
 

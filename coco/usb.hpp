@@ -275,7 +275,7 @@ COCO_PACK_BEGIN struct DeviceDescriptor {
     // set to 0x0210 (USB 2.10) for support of BOS descriptor)
     uint16_t bcdUSB = 0x0200;
 
-    DeviceClass  bDeviceClass;
+    DeviceClass bDeviceClass;
     uint8_t bDeviceSubClass;
     uint8_t bDeviceProtocol;
 

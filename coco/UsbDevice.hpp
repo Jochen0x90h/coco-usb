@@ -37,7 +37,7 @@ public:
     template <typename T>
     [[nodiscard]] static Awaitable<Buffer::Events> controlIn(Buffer &buffer, usb::Setup const &setup, const T &data) {
         int size = std::min(int(setup.wLength), int(sizeof(data)));
-        return buffer.writeData(&data, size);
+        return buffer.write(reinterpret_cast<const uint8_t *>(&data), size);
     }
 };
 

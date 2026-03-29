@@ -197,7 +197,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                     // get line coding (baud rate, frame format)
                     debug::out << "GET_LINE_CODING\n";
                     {
-                        auto &lineCoding = buffer.value<cdc::PstnLineCoding>();
+                        auto &lineCoding = buffer.cast<cdc::PstnLineCoding &>();
                         lineCoding.dwDTERate = baudRate;
                         lineCoding.bCharFormat = 0; // 1 stop bit
                         lineCoding.bDataBits = 8; // 8 data bits
@@ -215,7 +215,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                 switch (setup.bRequest) {
                 case usb::dfu::Request::DFU_GETSTATUS:
                     {
-                        auto &status = buffer.value<usb::dfu::StatusReport>();
+                        auto &status = buffer.cast<usb::dfu::StatusReport &>();
                         status = {
                             usb::dfu::Status::OK,
                             200, 0, // 200ms
@@ -243,7 +243,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                     // set line coding (baud rate, frame format)
                     if (setup.wLength >= sizeof(cdc::PstnLineCoding)) {
                         co_await buffer.read(setup.wLength);
-                        auto &lineCoding = buffer.value<cdc::PstnLineCoding>();
+                        auto &lineCoding = buffer.cast<cdc::PstnLineCoding &>();
 
                         baudRate = lineCoding.dwDTERate;
                         debug::out << "SET_LINE_CODING " << dec(baudRate) << ' ' << dec(lineCoding.bDataBits) << '\n';
@@ -330,10 +330,15 @@ Coroutine status(Loop &loop, Device &device, Buffer &buffer) {
         while (device.ready()) {
             int gray = count ^ (count >> 1);
 
-            co_await buffer.writeValue<StatusMessage>({
+            buffer.cast<StatusMessage &>() = {
                 {usb::RequestType(0xA1), cdc::PstnNotification::SERIAL_STATE, 0, 0, 2},
                 cdc::PstnSerialState((gray & 3) | ((gray & 4) << 1)) // DCD, DSR and RingSignal
-            });
+            };
+            co_await buffer.write(sizeof(StatusMessage));
+            /*co_await buffer.writeValue<StatusMessage>({
+                {usb::RequestType(0xA1), cdc::PstnNotification::SERIAL_STATE, 0, 0, 2},
+                cdc::PstnSerialState((gray & 3) | ((gray & 4) << 1)) // DCD, DSR and RingSignal
+            });*/
 
             co_await loop.sleep(1s);
 

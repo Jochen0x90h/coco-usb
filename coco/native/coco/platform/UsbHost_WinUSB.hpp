@@ -64,7 +64,7 @@ public:
 
         Endpoint &endpoint_;
 
-        Op op_;
+        //Op op_;
         OVERLAPPED overlapped_[2];
         int index_;
     };

@@ -266,9 +266,13 @@ Coroutine control(UsbDevice &usb, Buffer &buffer) {
                 {
                     // read color from control endpoint
                     co_await buffer.read(setup.wLength);
-                    int color = buffer.array<uint32_t>()[0];
-                    debug::set(color);
-                    debug::out << "color: " << dec(color) << '\n';
+                    if (buffer.size() == 4) {
+                        int color = buffer.cast<uint32_t>();
+                        debug::out << "color: " << dec(color) << '\n';
+                        debug::set(color);
+                    } else {
+                        debug::out << "invalid color data length: " << buffer.size() << '\n';
+                    }
                 }
                 break;
             default:
@@ -329,7 +333,7 @@ Coroutine write(Loop &loop, Device &device,  Buffer &buffer) {
 
         while (buffer.ready()) {
             // send data to host
-            co_await buffer.writeArray(data);
+            co_await buffer.write(data);
 
             co_await loop.sleep(500ms);
         }

@@ -56,7 +56,6 @@ public:
         void handle() override;
 
         UsbDevice_USB &device_;
-        //Op op_;
         uint8_t *transferIt_;
         uint8_t *transferEnd_;
     };

@@ -172,10 +172,10 @@ void UsbDevice_USBD::USBD_IRQHandler() {
         if (controlMode_ == Mode::DATA_IN) {
             // control IN transfer completed
             controlTransfers_.pop(
-                [](ControlBufferBase &buffer) {
+                [](auto &buffer) {
                     return buffer.writeBuffer();
                 },
-                [](ControlBufferBase &next) {
+                [](auto &next) {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
                     next.writeBuffer();
                 }
@@ -183,10 +183,10 @@ void UsbDevice_USBD::USBD_IRQHandler() {
         } else {
             // control OUT transfer completed
             controlTransfers_.pop(
-                [](ControlBufferBase &buffer) {
+                [](auto &buffer) {
                     return buffer.readBuffer();
                 },
-                [](ControlBufferBase &next) {
+                [](auto &next) {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
                 }
             );
@@ -300,8 +300,12 @@ UsbDevice_USBD::ControlBufferBase::~ControlBufferBase() {
 }
 
 bool UsbDevice_USBD::ControlBufferBase::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
         setSuccess();
         return false;
     }
@@ -516,8 +520,12 @@ UsbDevice_USBD::BufferBase::~BufferBase() {
 }
 
 bool UsbDevice_USBD::BufferBase::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
         setSuccess();
         return false;
     }

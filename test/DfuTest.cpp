@@ -118,7 +118,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                 device.stall();
                 break;
                 case dfu::Request::DFU_GETSTATE:
-                    buffer.value<dfu::State>() = dfuState;
+                    buffer.cast<dfu::State &>() = dfuState;
                     co_await buffer.write(std::min(int(setup.wLength), 1));
                     break;
             case dfu::Request::DFU_GETSTATUS:
@@ -142,7 +142,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                         ;
                     }
 
-                    auto &status = buffer.value<dfu::StatusReport>();
+                    auto &status = buffer.cast<dfu::StatusReport &>();
                     status = {
                         dfu::Status::OK,
                         200, 0,
@@ -171,7 +171,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                     if (setup.wLength > 0) {
                         // download section
                         co_await buffer.read(setup.wLength);
-                        global::currentCrc = crc::instance().calc(global::currentCrc, buffer.pointer<uint32_t>(), setup.wLength >> 2);
+                        global::currentCrc = crc::instance().calc(global::currentCrc, buffer.cast<uint32_t *>(), setup.wLength >> 2); // todo: pad to size divisible by 4
                         dfuState = dfu::State::DFU_DNLOAD_SYNC;
                     } else {
                         // download finished

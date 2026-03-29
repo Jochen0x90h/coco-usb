@@ -24,24 +24,21 @@
 namespace coco {
 
 namespace {
-usbd::BufferCapacity defaultBufferCapacity[1] = {{usbd::RxCapacity::_64, 64}};
+    const usbd::BufferCapacity defaultBufferCapacity[1] = {{usbd::RxCapacity::_64, 64}};
 }
 
 UsbDevice_USB::UsbDevice_USB(Loop_Queue &loop)
     : UsbDevice(State::OPENING)
     , loop_(loop)
 {
-    //debug::out << "UsbDevice_USB\n";
-
     usbd::enableClock()
-        .configure(defaultBufferCapacity)
+        .configure(defaultBufferCapacity).reset() // G0, H5: Necessary according to reference manual before enabling the USB interrupt, see "Programming considerations for Device and Host modes" in reference manual
         .clear(usbd::Status::ALL)
         .enable(usbd::Interrupt::RESET | usbd::Interrupt::CORRECT_TRANSFER);
 
     // enable USB interrupt
     nvic::setPriority(usbd::irq, nvic::Priority::HIGH);
     nvic::enable(usbd::irq);
-    //debug::out << "UsbDevice_USB2\n";
 }
 
 UsbDevice_USB::~UsbDevice_USB() {
@@ -124,17 +121,6 @@ void UsbDevice_USB::USB_IRQHandler() {
                 usb.controlStatusIn();
                 controlMode_ = Mode::STATUS;
 
-                // start transfers that are already waiting
-                /*for (int ep = 1; ep < 8; ++ep) {
-                    auto &transfers = transfers_[ep - 1];
-                    auto inBuffer = transfers.in.frontOrNull();
-                    if (inBuffer != nullptr)
-                        inBuffer->writeBuffer();
-                    auto outBuffer = transfers.out.frontOrNull();
-                    if (outBuffer != nullptr)
-                        usb.rxStart(ep);
-                }*/
-
                 // push this to the event handler queue so that the application gets notified about the sate change in UsbDevice_USB::handle()
                 Events e = iEvents_;
                 iEvents_ = e | Events::ENTER_READY;
@@ -156,16 +142,19 @@ void UsbDevice_USB::USB_IRQHandler() {
                     loop_.push(*this);
             }
         } else {
-            // received data from host
+            // data stage: received data from host in OUT transfer
+            // status stage: IN control transfer completed
+            //debug::out << dec(controlMode_) << '\n';
             switch (controlMode_) {
             case Mode::DATA_OUT:
                 // control OUT transfer completed
+                //debug::out << "rx\n";
                 controlTransfers_.pop(
-                    [](ControlBufferBase &buffer) {
+                    [](auto &buffer) {
                         // returns false if not finished yet
                         return buffer.readBuffer();
                     },
-                    [&usb](ControlBufferBase &next) {
+                    [&usb](auto &next) {
                         // start next buffer, only allowed when previus buffer had PARTIAL flag
                         assert(controlMode_ == Mode::DATA_OUT);
                         usb.rxStart(0); // start read
@@ -190,10 +179,10 @@ void UsbDevice_USB::USB_IRQHandler() {
         case Mode::DATA_IN:
             // control IN transfer completed
             controlTransfers_.pop(
-                [](ControlBufferBase &buffer) {
+                [](auto &buffer) {
                     return buffer.writeBuffer();
                 },
-                [](ControlBufferBase &next) {
+                [](auto &next) {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
                     assert(controlMode_ == Mode::DATA_IN);
                     next.writeBuffer();
@@ -210,6 +199,7 @@ void UsbDevice_USB::USB_IRQHandler() {
             // fall through
         default:
             // status stage of OUT control transfer complete
+            //debug::out << "c\n";
             controlMode_ = Mode::IDLE;
             usb.controlStall();
             break;
@@ -293,8 +283,12 @@ UsbDevice_USB::ControlBufferBase::~ControlBufferBase() {
 }
 
 bool UsbDevice_USB::ControlBufferBase::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
         setSuccess();
         return false;
     }
@@ -312,8 +306,10 @@ bool UsbDevice_USB::ControlBufferBase::start() {
         }
 
         // add to list of pending transfers and start immediately if list was empty
-        if (device.controlTransfers_.push(nvic::Guard(usbd::irq), *this))
+        if (device.controlTransfers_.push(nvic::Guard(usbd::irq), *this)) {
+            //debug::out << "start control read\n";
             usbd::instance().rxStart(0);
+        }
 
         // now wait for data arriving from host
     } else {
@@ -390,7 +386,7 @@ bool UsbDevice_USB::ControlBufferBase::writeBuffer() {
 
     auto transferIt = transferIt_;
     int toWrite = std::min(int(transferEnd_ - transferIt), BUFFER_SIZE);
-    if (toWrite > 0 || (partial && toWrite == 0)) {
+    if (toWrite > 0 || (!partial && toWrite == 0)) {
         // write data or ZLP
         int ep = 0;
         usb.tx(ep, (uint32_t *)transferIt, toWrite);
@@ -435,8 +431,12 @@ UsbDevice_USB::BufferBase::~BufferBase() {
 }
 
 bool UsbDevice_USB::BufferBase::start() {
-    if (state_ != State::READY || (op_ & Op::READ_WRITE) == 0 || size_ == 0) {
-        assert(state_ != State::BUSY);
+    if (state_ != State::READY) {
+        assert(false);
+        setError(std::errc::resource_unavailable_try_again);
+        return false;
+    }
+    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
         setSuccess();
         return false;
     }

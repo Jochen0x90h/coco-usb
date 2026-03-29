@@ -48,9 +48,10 @@ inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_
     return buffer.write(0);
 }
 
-inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_t wIndex, int32_t data) {
+inline auto controlOut(Buffer &buffer, Request request, uint16_t wValue, uint16_t wIndex, uint32_t data) {
     buffer.header<usb::Setup>() = {usb::RequestType::VENDOR_DEVICE_OUT, uint8_t(request), wValue, wIndex, 4};
-    return buffer.writeValue(data);
+    buffer.cast<uint32_t &>() = data;
+    return buffer.write(4);
 }
 
 
