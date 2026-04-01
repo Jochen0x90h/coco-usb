@@ -158,18 +158,18 @@ protected:
     Mode controlMode_ = Mode::IDLE;
 
     // active control transfers
-    InterruptQueue<ControlBufferBase> controlTransfers_;
+    InterruptQueue2<ControlBufferBase> controlTransfers_;
 
     // list of bulk/interrupt endpoints
     IntrusiveList<Endpoint> endpoints_;
 
     // for each endpont a queue of active in and out transfers
     struct Transfer {
-        InterruptQueue<BufferBase> in;
+        InterruptQueue2<BufferBase> in;
         std::atomic<bool> outAvailable;
-        InterruptQueue<BufferBase> out;
+        InterruptQueue2<BufferBase> out;
     };
-    Transfer bulkTransfers_[7];
+    Transfer transfers_[7];
 };
 
 } // namespace coco

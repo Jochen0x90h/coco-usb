@@ -161,7 +161,7 @@ int main() {
     Drivers drivers;
 
     echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer1, 1);
-    echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer2, 2);
+    //echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer2, 2);
 
     //readTest(drivers.loop, drivers.device, drivers.buffer1);
 

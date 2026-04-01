@@ -46,6 +46,7 @@ board_test(UsbTest coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansi
 board_test(UsbTest coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
 board_test(UsbTest coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
 board_test(UsbTest coco-devboards::nucleo-h503rb)
+board_test(UsbTest coco-devboards::nucleo-u385rg-q)
 board_test(UsbTestHost coco-devboards::native)
 
 board_test(UsbSerialTest coco-devboards::nrf52dongle)
@@ -54,7 +55,7 @@ board_test(UsbSerialTest coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 e
 board_test(UsbSerialTest coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
 board_test(UsbSerialTest coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
 board_test(UsbSerialTest coco-devboards::nucleo-h503rb)
-#board_test(UsbSerialTest coco-devboards::nucleo-u385rg-q)
+board_test(UsbSerialTest coco-devboards::nucleo-u385rg-q)
 
 board_test(DfuTestHost coco-devboards::native)
 board_test(DfuTest coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board

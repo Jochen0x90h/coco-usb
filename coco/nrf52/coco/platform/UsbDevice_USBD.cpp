@@ -1,6 +1,6 @@
 #include "UsbDevice_USBD.hpp"
-//#include <coco/convert.hpp>
-//#include <coco/debug.hpp>
+#include <coco/convert.hpp>
+#include <coco/debug.hpp>
 #include <coco/platform/nvic.hpp>
 
 
@@ -108,6 +108,27 @@ void UsbDevice_USBD::USBD_IRQHandler() {
             // set configuration
             //uint8_t configurationValue = NRF_USBD->WVALUEL;
 
+            for (auto &endpoint : endpoints_) {
+                if (endpoint.inIndex_ > 0) {
+                    // enable
+                    NRF_USBD->EPINEN = NRF_USBD->EPINEN | (1 << endpoint.inIndex_);
+
+                    // reset toggle
+                    NRF_USBD->DTOGGLE = endpoint.inIndex_ | N(USBD_DTOGGLE_IO, In) | N(USBD_DTOGGLE_VALUE, Data0);
+                }
+                if (endpoint.outIndex_ > 0) {
+                    // enable
+                    NRF_USBD->EPOUTEN = NRF_USBD->EPOUTEN | (1 << endpoint.outIndex_);
+
+                    // reset toggle
+                    NRF_USBD->DTOGGLE = endpoint.outIndex_ | N(USBD_DTOGGLE_IO, Out) | N(USBD_DTOGGLE_VALUE, Data0);
+
+                    // write any value to start receiving OUT transfers into intermediate buffer
+                    NRF_USBD->SIZE.EPOUT[endpoint.outIndex_] = 0;
+                }
+            }
+
+/*
             // enable endpoints
             int inFlags = 1;
             int outFlags = 1;
@@ -119,10 +140,10 @@ void UsbDevice_USBD::USBD_IRQHandler() {
             }
             NRF_USBD->EPINEN = inFlags;
             NRF_USBD->EPOUTEN = outFlags;
-
+*/
             // acknowledge the control transfer
             NRF_USBD->TASKS_EP0STATUS = TRIGGER;
-
+/*
             // reset toggles, start OUT and enable buffers
             for (auto &endpoint : endpoints_) {
                 NRF_USBD->DTOGGLE = endpoint.inIndex_ | N(USBD_DTOGGLE_IO, In) | N(USBD_DTOGGLE_VALUE, Data0);
@@ -131,15 +152,7 @@ void UsbDevice_USBD::USBD_IRQHandler() {
                 // write any value to start receiving OUT transfers into intermediate buffer
                 NRF_USBD->SIZE.EPOUT[endpoint.outIndex_] = 0;
             }
-
-            // start IN transfers that are already waiting
-            /*for (int ep = 1; ep < 8; ++ep) {
-                auto &transfers = bulkTransfers_[ep - 1];
-                auto inBuffer = transfers.in.frontOrNull();
-                if (inBuffer != nullptr)
-                    inBuffer->writeFirst();
-            }*/
-
+*/
             // set state
             //iState_ = State::READY;
 
@@ -171,7 +184,7 @@ void UsbDevice_USBD::USBD_IRQHandler() {
 
         if (controlMode_ == Mode::DATA_IN) {
             // control IN transfer completed
-            controlTransfers_.pop(
+            /*controlTransfers_.pop(
                 [](auto &buffer) {
                     return buffer.writeBuffer();
                 },
@@ -179,15 +192,42 @@ void UsbDevice_USBD::USBD_IRQHandler() {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
                     next.writeBuffer();
                 }
+            );*/
+            controlTransfers_.popIf(
+                [](auto &buffer) {
+                    // returns false to reject the pop if not finished yet
+                    return buffer.writeBuffer();
+                },
+                [](auto &next) {
+                    // start next buffer, only allowed when previus buffer had PARTIAL flag
+                    next.writeBuffer();
+                },
+                [this](auto &buffer) {
+                    // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+                    loop_.push(buffer);
+                }
             );
         } else {
             // control OUT transfer completed
-            controlTransfers_.pop(
+            /*controlTransfers_.pop(
                 [](auto &buffer) {
                     return buffer.readBuffer();
                 },
                 [](auto &next) {
                     // start next buffer, only allowed when previus buffer had PARTIAL flag
+                }
+            );*/
+            controlTransfers_.popIf(
+                [](auto &buffer) {
+                    // returns false to reject the pop if not finished yet
+                    return buffer.readBuffer();
+                },
+                [](auto &next) {
+                    // start next buffer, only allowed when previus buffer had PARTIAL flag
+                },
+                [this](auto &buffer) {
+                    // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+                    loop_.push(buffer);
                 }
             );
         }
@@ -218,9 +258,9 @@ void UsbDevice_USBD::USBD_IRQHandler() {
 
             if (dataStatus & outFlag) {
                 // OUT transfer completed (received from host)
-                auto &transfer = bulkTransfers_[ep - 1];
+                auto &transfer = transfers_[ep - 1];
 
-                if (transfer.out.pop(
+                /*if (transfer.out.pop(
                     [](BufferBase &buffer) {
                         return buffer.readBuffer();
                     },
@@ -230,19 +270,83 @@ void UsbDevice_USBD::USBD_IRQHandler() {
                 ) == -1) {
                     // store flag that there is a pending OUT packet
                     transfer.outAvailable = true;
-                }
+                }*/
+                transfer.outAvailable = transfer.out.empty();
+                transfer.out.popIf(
+                    [](BufferBase &buffer) {
+                        // returns false to reject the pop if not finished yet
+                        return buffer.readBuffer();
+                    },
+                    //[](BufferBase &next) {
+                        // nothing to do, receive into hardware buffer starts automatically
+                    //},
+                    [this](auto &buffer) {
+                        // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+                        loop_.push(buffer);
+                    }
+                );
             }
             if (dataStatus & inFlag) {
                 // IN transfer completed (sent to host)
-                auto &transfer = bulkTransfers_[ep - 1];
+                auto &transfer = transfers_[ep - 1];
 
-                transfer.in.pop(
+                /*transfer.in.pop(
                     [](BufferBase &buffer) {
                         return buffer.writeBuffer();
                     },
                     [](BufferBase &next) {
                         // start next buffer
                         next.writeBuffer();
+                    }
+                );*/
+                transfer.in.popIf(
+                    [](BufferBase &buffer) {
+                        // returns false to reject the pop if not finished yet
+                        return buffer.writeBuffer();
+                    },
+                    [](BufferBase &next) {
+                        // start next buffer
+                        next.writeBuffer();
+                    },
+                    [this](auto &buffer) {
+                        if ((buffer.op_ & BufferBase::Op::READ) != 0) {
+                            // read/OUT after write
+                            buffer.transferEnd_ = buffer.data_ + buffer.capacity_;
+                            int ep = buffer.endpoint_.outIndex_;
+                            auto &transfer = transfers_[ep - 1];
+
+                            // add to list of pending transfers and start immediately if list was empty
+                            if (transfer.out.push(buffer)) { // disable interrupt not necessary as writeNext() is always called from interrupt
+                                // check if a packet is already available
+                                if (transfer.outAvailable) {
+                                    transfer.outAvailable = false;
+
+                                    // remove from list of pending transfers again if packet was available
+                                    /*transfer.out.pop(
+                                        [](BufferBase &buffer) {
+                                            return buffer.readBuffer();
+                                        }
+                                    );*/
+                                    transfer.out.popIf(
+                                        [](BufferBase &buffer) {
+                                            // returns false to reject the pop if not finished yet
+                                            return buffer.readBuffer();
+                                        },
+                                        [this](auto &buffer) {
+                                            // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+                                            loop_.push(buffer);
+                                        }
+                                    );
+                                } else {
+                                    // nothing to do, receive into hardware buffer starts automatically
+                                }
+                            }
+                        } else {
+                            setSuccess();
+
+                            // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+                            loop_.push(buffer);
+                        }
                     }
                 );
             }
@@ -401,7 +505,7 @@ bool UsbDevice_USBD::ControlBufferBase::readBuffer() {
     }
 
     // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-    device_.loop_.push(*this);
+    //device_.loop_.push(*this);
 
     // finished
     return true;
@@ -445,7 +549,7 @@ bool UsbDevice_USBD::ControlBufferBase::writeBuffer() {
     setSuccess();
 
     // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-    device_.loop_.push(*this);
+    //device_.loop_.push(*this);
 
     // finished
     return true;
@@ -525,7 +629,9 @@ bool UsbDevice_USBD::BufferBase::start() {
         setError(std::errc::resource_unavailable_try_again);
         return false;
     }
-    if ((op_ & Op::READ_WRITE) == 0 || size_ == 0) {
+
+    // sending/receiving zero length packets is allowed
+    if ((op_ & Op::READ_WRITE) == 0) {
         setSuccess();
         return false;
     }
@@ -533,11 +639,11 @@ bool UsbDevice_USBD::BufferBase::start() {
     // start the transfer
     auto &device = endpoint_.device_;
     transferIt_ = data_;
+    transferEnd_ = data_ + size_;
     if ((op_ & Op::WRITE) == 0) {
         // read/OUT
-        transferEnd_ = data_ + capacity_;
         int ep = endpoint_.outIndex_;
-        auto &transfer = device.bulkTransfers_[ep - 1];
+        auto &transfer = device.transfers_[ep - 1];
 
         // add to list of pending transfers and start immediately if list was empty
         if (transfer.out.push(nvic::Guard(USBD_IRQn), *this)) {
@@ -546,22 +652,31 @@ bool UsbDevice_USBD::BufferBase::start() {
                 transfer.outAvailable = false;
 
                 // remove from list of pending transfers again if transfer was only one packet
-                transfer.out.pop(
+                /*transfer.out.pop(
                     [](BufferBase &buffer) {
                         return buffer.readBuffer();
                     }
+                );*/
+                transfer.out.popIf(
+                    [](BufferBase &buffer) {
+                        // returns false to reject the pop if not finished yet
+                        return buffer.readBuffer();
+                    },
+                    [&device](auto &buffer) {
+                        // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
+                        device.loop_.push(buffer);
+                    }
                 );
             } else {
-                // nothing to do, receive starts automatically
+                // nothing to do, receive into hardware buffer starts automatically
             }
         }
 
         // now wait for data arriving from host
     } else {
         // write/IN
-        transferEnd_ = data_ + size_;
         int ep = endpoint_.inIndex_;
-        auto &transfer = device.bulkTransfers_[ep - 1];
+        auto &transfer = device.transfers_[ep - 1];
 
         // add to list of pending transfers and start immediately if list was empty
         if (transfer.in.push(nvic::Guard(USBD_IRQn), *this)) {
@@ -581,10 +696,10 @@ bool UsbDevice_USBD::BufferBase::cancel() {
     auto &device = endpoint_.device_;
 
     // read/out: can remove even if active because the next transfer will go into the next buffer or set outAvailable
-    device.bulkTransfers_[endpoint_.outIndex_ - 1].out.remove(nvic::Guard(USBD_IRQn), *this);
+    device.transfers_[endpoint_.outIndex_ - 1].out.remove(nvic::Guard(USBD_IRQn), *this);
 
     // write/in: can remove even if active because next transfer will call write() on next buffer
-    device.bulkTransfers_[endpoint_.inIndex_ - 1].in.remove(nvic::Guard(USBD_IRQn), *this);
+    device.transfers_[endpoint_.inIndex_ - 1].in.remove(nvic::Guard(USBD_IRQn), *this);
 
     // cancel takes effect immediately
     setError(std::errc::operation_canceled);
@@ -599,6 +714,7 @@ bool UsbDevice_USBD::BufferBase::readBuffer() {
 
     int received = NRF_USBD->SIZE.EPOUT[ep];
     int toCopy = std::min(received, int(transferEnd - transferIt));
+//debug::out << "received " << dec(received) << '\n';
     NRF_USBD->EPOUT[ep].PTR = intptr_t(transferIt);
     NRF_USBD->EPOUT[ep].MAXCNT = toCopy;
 
@@ -623,9 +739,10 @@ bool UsbDevice_USBD::BufferBase::readBuffer() {
 
     // read operation has finished: set number of transferred bytes
     setSuccess(transferIt - data_);
+//debug::out << "success\n";
 
     // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
-    endpoint_.device_.loop_.push(*this);
+    //endpoint_.device_.loop_.push(*this);
 
     // finished
     return true;
@@ -658,7 +775,7 @@ bool UsbDevice_USBD::BufferBase::writeBuffer() {
 
     // write operation has finished
 
-    if ((op_ & Op::READ) != 0) {
+/*    if ((op_ & Op::READ) != 0) {
         // read/OUT after write
         auto &device = endpoint_.device_;
         transferEnd_ = data_ + capacity_;
@@ -686,7 +803,7 @@ bool UsbDevice_USBD::BufferBase::writeBuffer() {
 
         // push finished buffer to event loop so that ControlBufferBase::handle() gets called from the event loop
         endpoint_.device_.loop_.push(*this);
-    }
+    }*/
 
     // write finished
     return true;

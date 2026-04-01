@@ -180,7 +180,7 @@ protected:
     Mode controlMode_ = Mode::IDLE;
 
     // queue of active control transfers
-    InterruptQueue<ControlBufferBase> controlTransfers_;
+    InterruptQueue2<ControlBufferBase> controlTransfers_;
 
 
     // list of bulk/interrupt endpoints
@@ -188,9 +188,9 @@ protected:
 
     // for each endpont a queue of active in and out transfers (bulkTransfers[0].in is for IN endpoint 1)
     struct Transfer {
-        InterruptQueue<BufferBase> in;
+        InterruptQueue2<BufferBase> in;
         std::atomic<bool> outAvailable;
-        InterruptQueue<BufferBase> out;
+        InterruptQueue2<BufferBase> out;
     };
     Transfer transfers_[7];
 };

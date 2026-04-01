@@ -354,7 +354,7 @@ Coroutine echo(Loop &loop, Device &device, Buffer &buffer) {
             // receive data from host
             co_await buffer.read();
             int transferred = buffer.size();
-
+debug::out << "received " << dec(transferred) << '\n';
             debug::set(debug::GREEN);
 
             // check received data
