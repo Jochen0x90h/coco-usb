@@ -2,6 +2,7 @@
 #include <coco/convert.hpp>
 #include <coco/Loop.hpp>
 #include <coco/debug.hpp>
+#include <coco/platform/system.hpp>
 
 
 /*
@@ -33,7 +34,7 @@ enum class VendorRequest : uint8_t {
     BLUE = 2,
     COLOR = 3,
     DEVICE_ID = 4,
-    VARIANT_ID = 5,
+    REVISION_ID = 5,
     WINUSB = 6,
 };
 
@@ -284,25 +285,17 @@ Coroutine control(UsbDevice &usb, Buffer &buffer) {
             case VendorRequest::DEVICE_ID:
                 // send device id to host
                 {
-#ifdef NATIVE
-                    uint32_t value = 0;
-#else
-                    uint32_t value = getDeviceId();
-#endif
+                    uint32_t value = system::device();
 #ifdef NRF52
                     //value = NRF_UICR->NRFFW[0]; // flash end
 #endif
                     co_await UsbDevice::controlIn(buffer, setup, value);
                 }
                 break;
-            case VendorRequest::VARIANT_ID:
-                // send variant id to host
+            case VendorRequest::REVISION_ID:
+                // send revision id to host
                 {
-#ifdef NATIVE
-                    uint32_t value = 0;
-#else
-                    uint32_t value = getVariantId();
-#endif
+                    uint32_t value = system::revision();
                     co_await UsbDevice::controlIn(buffer, setup, value);
                 }
                 break;

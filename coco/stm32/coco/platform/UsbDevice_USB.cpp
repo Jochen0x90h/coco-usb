@@ -74,7 +74,7 @@ void UsbDevice_USB::USB_IRQHandler() {
     auto status = usb.status();
     if ((status & usbd::Status::RESET) != 0) {
         // device was connected to the host
-        debug::out << "connected\n";
+        //debug::out << "connected\n";
         usb.configure(defaultBufferCapacity)
             .reset();
     }

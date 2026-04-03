@@ -79,9 +79,6 @@ Coroutine echoTest(Loop &loop, UsbHostDevice &device, Buffer &control, Buffer &b
         if (endpoint == 1) {
             for (int i = 1; i <= 8; ++i) {
                 co_await controlOut(control, Request::COLOR, 0, 256, i);
-
-                // wait because otherwise it seems that the control buffer data gets overwritten
-                co_await loop.sleep(50ms);
             }
             co_await controlOut(control, Request::RED, 1, 0); // set red on if wValue != 0
             co_await controlOut(control, Request::RED, 0, 0);
