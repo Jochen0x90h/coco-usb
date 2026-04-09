@@ -158,16 +158,16 @@ protected:
     Mode controlMode_ = Mode::IDLE;
 
     // active control transfers
-    InterruptQueue2<ControlBufferBase> controlTransfers_;
+    InterruptQueue<ControlBufferBase> controlTransfers_;
 
     // list of bulk/interrupt endpoints
     IntrusiveList<Endpoint> endpoints_;
 
     // for each endpont a queue of active in and out transfers
     struct Transfer {
-        InterruptQueue2<BufferBase> in;
+        InterruptQueue<BufferBase> in;
         std::atomic<bool> outAvailable;
-        InterruptQueue2<BufferBase> out;
+        InterruptQueue<BufferBase> out;
     };
     Transfer transfers_[7];
 };
