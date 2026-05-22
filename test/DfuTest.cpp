@@ -117,10 +117,10 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                 // not supported
                 device.stall();
                 break;
-                case dfu::Request::DFU_GETSTATE:
-                    buffer.cast<dfu::State &>() = dfuState;
-                    co_await buffer.write(std::min(int(setup.wLength), 1));
-                    break;
+            case dfu::Request::DFU_GETSTATE:
+                buffer.cast<dfu::State &>() = dfuState;
+                co_await buffer.write(std::min(int(setup.wLength), 1));
+                break;
             case dfu::Request::DFU_GETSTATUS:
                 //debug::out << "DFU_GETSTATUS wValue " << dec(setup.wValue) << " wLength " << dec(setup.wLength) << '\n';
                 {

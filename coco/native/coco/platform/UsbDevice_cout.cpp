@@ -9,7 +9,8 @@ namespace coco {
 
 UsbDevice_cout::UsbDevice_cout(Loop_native &loop)
     : UsbDevice(State::OPENING)
-    , loop_(loop), callback_(makeCallback<UsbDevice_cout, &UsbDevice_cout::handle>(this))
+    , loop_(loop)
+    //, callback_(makeCallback<UsbDevice_cout, &UsbDevice_cout::onTimeout>(this))
 {
     // start coroutine
     readDescriptors();
@@ -66,10 +67,10 @@ Coroutine UsbDevice_cout::readDescriptors() {
 
     // invoke handle() when transfers are pending
     if (!transfers_.empty())
-        loop_.invoke(callback_);
+        loop_.invoke(*this);
 }
 
-void UsbDevice_cout::handle() {
+void UsbDevice_cout::onTimeout() {
     // check if there is a pending control transfer
     for (auto &buffer : controlTransfers_) {
         auto &setup = setup_;
@@ -134,7 +135,7 @@ void UsbDevice_cout::handle() {
 
     // invoke handle() again when there are more pending transfers
     if (!controlTransfers_.empty() || (!transfers_.empty() && state_ == State::READY))
-        loop_.invoke(callback_);
+        loop_.invoke(*this);
 }
 
 
@@ -165,7 +166,7 @@ bool UsbDevice_cout::ControlBuffer::start() {
     auto &device = device_;
 
     device.controlTransfers_.add(*this);
-    device.loop_.invoke(device.callback_);
+    device.loop_.invoke(device);
 
     // set state
     setBusy();
@@ -212,7 +213,7 @@ bool UsbDevice_cout::Buffer::start() {
 
     auto &device = endpoint_.device_;
     device.transfers_.add(*this);
-    device.loop_.invoke(device.callback_);
+    device.loop_.invoke(device);
 
     // set state
     setBusy();

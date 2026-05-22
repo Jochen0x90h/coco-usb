@@ -9,10 +9,11 @@
 namespace coco {
 
 UsbHost_WinUSB::UsbHost_WinUSB(Loop_Win32 &loop)
-    : loop_(loop), callback_(makeCallback<UsbHost_WinUSB, &UsbHost_WinUSB::handle>(this))
+    : loop_(loop)
+    //, callback_(makeCallback<UsbHost_WinUSB, &UsbHost_WinUSB::onTimeout>(this))
 {
     // regularly scan for usb devices
-    loop.invoke(callback_);
+    loop.invoke(*this);
 }
 
 //UsbHost_WinUSB::~UsbHost_WinUSB() {
@@ -34,8 +35,8 @@ static int parseHex(const char *s) {
     return value;
 }*/
 
-void UsbHost_WinUSB::handle() {
-    loop_.invoke(callback_, 1s);
+void UsbHost_WinUSB::onTimeout() {
+    loop_.invoke(*this, 1s);
 
     // enumerate devices
     HDEVINFO deviceInfo = SetupDiGetClassDevsA(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -265,17 +266,17 @@ void UsbHost_WinUSB::Device::disconnect() {
     }
 }
 
-void UsbHost_WinUSB::Device::handle(OVERLAPPED *overlapped) {
+void UsbHost_WinUSB::Device::onCompletion(OVERLAPPED *overlapped) {
     for (auto &buffer : controlBuffers_) {
         if (overlapped == &buffer.overlapped_) {
-            buffer.handle(overlapped);
+            buffer.onCompletion(overlapped);
             return;
         }
     }
     for (auto &endpoint : endpoints_) {
         for (auto &buffer : endpoint.buffers_) {
             if (overlapped == &buffer.overlapped_[buffer.index_]) {
-                buffer.handle(overlapped);
+                buffer.onCompletion(overlapped);
                 return;
             }
         }
@@ -363,7 +364,7 @@ bool UsbHost_WinUSB::ControlBuffer::transfer() {
     } else {
         int error = GetLastError();
         if (error == ERROR_IO_PENDING) {
-            // wait for completion in handle()
+            // wait for completion
             return true;
         }
         setSystemError(error);
@@ -371,7 +372,7 @@ bool UsbHost_WinUSB::ControlBuffer::transfer() {
     return false;
 }
 
-void UsbHost_WinUSB::ControlBuffer::handle(OVERLAPPED *overlapped) {
+void UsbHost_WinUSB::ControlBuffer::onCompletion(OVERLAPPED *overlapped) {
     DWORD transferred;
     auto result = GetOverlappedResult(device_.file_, overlapped, &transferred, false);
     if (result) {
@@ -493,7 +494,7 @@ bool UsbHost_WinUSB::Buffer::transfer() {
     return true;
 }
 
-void UsbHost_WinUSB::Buffer::handle(OVERLAPPED *overlapped) {
+void UsbHost_WinUSB::Buffer::onCompletion(OVERLAPPED *overlapped) {
     auto &device = endpoint_.device_;
     DWORD transferred;
     auto result = GetOverlappedResult(device.file_, overlapped, &transferred, false);

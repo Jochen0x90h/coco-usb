@@ -285,7 +285,7 @@ Coroutine control(UsbDevice &usb, Buffer &buffer) {
             case VendorRequest::DEVICE_ID:
                 // send device id to host
                 {
-                    uint32_t value = system::device();
+                    uint32_t value = system::id();
 #ifdef NRF52
                     //value = NRF_UICR->NRFFW[0]; // flash end
 #endif
@@ -295,7 +295,7 @@ Coroutine control(UsbDevice &usb, Buffer &buffer) {
             case VendorRequest::REVISION_ID:
                 // send revision id to host
                 {
-                    uint32_t value = system::revision();
+                    uint32_t value = system::build();
                     co_await UsbDevice::controlIn(buffer, setup, value);
                 }
                 break;

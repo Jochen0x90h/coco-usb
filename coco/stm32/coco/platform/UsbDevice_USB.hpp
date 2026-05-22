@@ -19,7 +19,7 @@ namespace coco {
 /// Resources:
 ///   USB
 ///   USB PMA (packet memory area)
-class UsbDevice_USB : public UsbDevice, public Loop_Queue::Handler {
+class UsbDevice_USB : public UsbDevice, public Loop_Queue::CompletionHandler {
 public:
     /// @brief Constructor
     /// @param loop Event loop
@@ -33,7 +33,7 @@ public:
 
 
     // internal control buffer base class, derives from IntrusiveListNode for the list of buffers and Loop_Queue::Handler to be notified from the event loop
-    class ControlBufferBase : public Buffer, public IntrusiveListNode, public Loop_Queue::Handler {
+    class ControlBufferBase : public Buffer, public IntrusiveListNode, public Loop_Queue::CompletionHandler {
         friend class UsbDevice_USB;
     public:
         static constexpr int BUFFER_SIZE = 64;
@@ -53,7 +53,7 @@ public:
         bool writeBuffer();
 
         // called from event loop to notify app about state changes and control requests
-        void handle() override;
+        void onCompletion() override;
 
         UsbDevice_USB &device_;
         uint8_t *transferIt_;
@@ -75,7 +75,7 @@ public:
     class Endpoint;
 
     // internal bulk buffer base class, derives from IntrusiveListNode for the list of buffers and Loop_Queue::Handler to be notified from the event loop
-    class BufferBase : public Buffer, public IntrusiveListNode, public Loop_Queue::Handler {
+    class BufferBase : public Buffer, public IntrusiveListNode, public Loop_Queue::CompletionHandler {
         friend class UsbDevice_USB;
     public:
         static constexpr int BUFFER_SIZE = 64;
@@ -95,7 +95,7 @@ public:
         bool writeBuffer();
 
         // called from event loop to notify app about state changes and control requests
-        void handle() override;
+        void onCompletion() override;
 
         Endpoint &endpoint_;
         uint8_t *transferIt_;
@@ -151,7 +151,7 @@ public:
     ///
     void USB_IRQHandler();
 protected:
-    void handle() override;
+    void onCompletion() override;
 
     Loop_Queue &loop_;
 

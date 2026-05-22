@@ -9,7 +9,7 @@ namespace coco {
 
 /// @brief Implementation of an USB device that simply writes info about the transfer operations to std::cout
 ///
-class UsbDevice_cout : public UsbDevice {
+class UsbDevice_cout : public UsbDevice, public Loop_native::TimeoutHandler {
 public:
     /// @brief Constructor
     /// @param getDescriptor callback for obtaining descriptors
@@ -25,7 +25,7 @@ public:
 
     /// @brief Buffer for control transfers
     ///
-    class ControlBuffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
+    class ControlBuffer : public coco::Buffer, public coco::IntrusiveListNode, public IntrusiveListNode2 {
         friend class UsbDevice_cout;
     public:
         ControlBuffer(int capacity, UsbDevice_cout &device);
@@ -44,7 +44,7 @@ public:
 
     /// @brief Buffer for transferring data to/from an endpoint
     ///
-    class Buffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
+    class Buffer : public coco::Buffer, public coco::IntrusiveListNode, public IntrusiveListNode2 {
         friend class UsbDevice_cout;
     public:
         Buffer(int capacity, Endpoint &endpoint);
@@ -60,7 +60,7 @@ public:
 
     /// @brief Endpoint
     ///
-    class Endpoint : public BufferDevice, public IntrusiveListNode {
+    class Endpoint : public BufferDevice, public coco::IntrusiveListNode {
         friend class UsbDevice_cout;
         friend class BulkBuffer;
     public:
@@ -81,10 +81,10 @@ public:
 
 protected:
     Coroutine readDescriptors();
-    void handle();
+    void onTimeout() override;
 
     Loop_native &loop_;
-    TimedTask<Callback> callback_;
+    //TimedTask<Callback<>> callback_;
 
     usb::Setup setup_;
 

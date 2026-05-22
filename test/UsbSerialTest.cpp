@@ -195,7 +195,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                 switch (setup.bRequest) {
                 case cdc::PstnRequest::GET_LINE_CODING:
                     // get line coding (baud rate, frame format)
-                    debug::out << "GET_LINE_CODING\n";
+                    //debug::out << "GET_LINE_CODING\n";
                     {
                         auto &lineCoding = buffer.cast<cdc::PstnLineCoding &>();
                         lineCoding.dwDTERate = baudRate;
@@ -204,6 +204,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                         lineCoding.bParityType = 0; // no parity
 
                         co_await buffer.write(std::min(int(setup.wLength), int(sizeof(cdc::PstnLineCoding))));
+                        debug::out << "GET_LINE_CODING " << dec(baudRate) << ' ' << dec(lineCoding.bDataBits) << '\n';
                     }
                     break;
                 default:
@@ -211,6 +212,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                     //debug::set(debug::MAGENTA);
                     device.stall();
                 }
+                break;
             case INTF_DFU:
                 switch (setup.bRequest) {
                 case usb::dfu::Request::DFU_GETSTATUS:
@@ -224,6 +226,7 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                         };
                         co_await buffer.write(std::min(int(setup.wLength), int(sizeof(usb::dfu::StatusReport))));
                     }
+                    break;
                 default:
                     device.stall();
                 }

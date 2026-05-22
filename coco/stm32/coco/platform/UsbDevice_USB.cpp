@@ -293,7 +293,7 @@ void UsbDevice_USB::USB_IRQHandler() {
 }
 
 // called from event loop to notify app about state changes and control requests
-void UsbDevice_USB::handle() {
+void UsbDevice_USB::onCompletion() {
     Events events = iEvents_.exchange(Events::NONE);
 
     if ((events & Events::ENTER_READY) != 0) {
@@ -456,7 +456,7 @@ bool UsbDevice_USB::ControlBufferBase::writeBuffer() {
     return true;
 }
 
-void UsbDevice_USB::ControlBufferBase::handle() {
+void UsbDevice_USB::ControlBufferBase::onCompletion() {
     setReady();
 }
 
@@ -601,7 +601,7 @@ bool UsbDevice_USB::BufferBase::writeBuffer() {
     return true;
 }
 
-void UsbDevice_USB::BufferBase::handle() {
+void UsbDevice_USB::BufferBase::onCompletion() {
     setReady();
 }
 

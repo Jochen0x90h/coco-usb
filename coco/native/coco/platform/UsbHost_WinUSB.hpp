@@ -14,7 +14,7 @@ namespace coco {
 
 /// @brief USB host implementation using Win32 and WinUsb
 /// https://learn.microsoft.com/en-us/windows/win32/api/winusb/
-class UsbHost_WinUSB {
+class UsbHost_WinUSB : public Loop_Win32::TimeoutHandler {
 public:
     UsbHost_WinUSB(Loop_Win32 &loop);
     //~UsbHost_WinUSB() override;
@@ -24,7 +24,7 @@ public:
 
     /// @brief Buffer for control transfers
     /// Max size is 512 according to spec: https://www.techdesignforums.com/practice/technique/usb-3-0-protocol-layer-2/
-    class ControlBuffer : public coco::Buffer, public IntrusiveListNode, public IntrusiveListNode2 {
+    class ControlBuffer : public coco::Buffer, public coco::IntrusiveListNode {
         friend class Device;
     public:
         ControlBuffer(int capacity, Device &device);
@@ -36,7 +36,7 @@ public:
 
     protected:
         bool transfer();
-        void handle(OVERLAPPED *overlapped);
+        void onCompletion(OVERLAPPED *overlapped);
 
         Device &device_;
         WINUSB_SETUP_PACKET setup_;
@@ -48,7 +48,7 @@ public:
 
     /// @brief Buffer for transferring data to/from an endpoint
     ///
-    class Buffer : public coco::Buffer, public IntrusiveListNode {//, public IntrusiveListNode2 {
+    class Buffer : public coco::Buffer, public coco::IntrusiveListNode {
         friend class UsbHost_WinUSB::Device;
     public:
         Buffer(int capacity, Endpoint &endpoint);
@@ -60,7 +60,7 @@ public:
 
     protected:
         bool transfer();
-        void handle(OVERLAPPED *overlapped);
+        void onCompletion(OVERLAPPED *overlapped);
 
         Endpoint &endpoint_;
 
@@ -71,7 +71,7 @@ public:
 
     /// @brief Bulk/Interrupt endpoint
     ///
-    class Endpoint : public BufferDevice, public IntrusiveListNode {
+    class Endpoint : public BufferDevice, public coco::IntrusiveListNode {
         friend class UsbHost_WinUSB::Device;
         friend class Buffer;
     public:
@@ -95,7 +95,7 @@ public:
     /// @brief USB device as seen by the host.
     /// Connects itself to an actual USB device when it is plugged in and the filter on the device descriptor returns
     /// true.
-    class Device : public UsbHostDevice, public Loop_Win32::CompletionHandler, public IntrusiveListNode {
+    class Device : public UsbHostDevice, public Loop_Win32::CompletionHandler, public coco::IntrusiveListNode {
         friend class UsbHost_WinUSB;
     public:
         /// @brief Constructor.
@@ -112,7 +112,7 @@ public:
     protected:
         void connect(HANDLE file, void *interface);
         void disconnect();
-        void handle(OVERLAPPED *overlapped) override;
+        void onCompletion(OVERLAPPED *overlapped) override;
 
         UsbHost_WinUSB &host_;
         std::function<bool (const usb::DeviceDescriptor &)> filter_;
@@ -137,10 +137,10 @@ public:
     };
 
 protected:
-    void handle();
+    void onTimeout() override;
 
     Loop_Win32 &loop_;
-    TimedTask<Callback> callback_;
+    //TimedTask<Callback<>> callback_;
     std::map<std::string, Device *> deviceInfos_;
     IntrusiveList<Device> devices_;
 };
