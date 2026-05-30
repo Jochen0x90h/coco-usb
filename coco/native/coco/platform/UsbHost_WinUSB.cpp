@@ -1,6 +1,6 @@
 #include "UsbHost_WinUSB.hpp" // includes Windows.h and winusb.h
 #include <coco/convert.hpp>
-#include <iostream>
+//#include <iostream>
 #include <SetupAPI.h>
 #include <initguid.h>
 #include <usbiodef.h>
@@ -10,7 +10,6 @@ namespace coco {
 
 UsbHost_WinUSB::UsbHost_WinUSB(Loop_Win32 &loop)
     : loop_(loop)
-    //, callback_(makeCallback<UsbHost_WinUSB, &UsbHost_WinUSB::onTimeout>(this))
 {
     // regularly scan for usb devices
     loop.invoke(*this);
@@ -65,39 +64,40 @@ void UsbHost_WinUSB::onTimeout() {
         }
 
         // check if device is new
-        auto p = deviceInfos_.insert(std::map<std::string, Device *>::value_type{u.devicePath.DevicePath, nullptr});
+        auto p = deviceMap_.insert(std::map<std::string, Device *>::value_type{u.devicePath.DevicePath, nullptr});
         auto it = p.first;
         if (p.second) {
             // found a new device, path has the form \\?\usb#vid_1915&pid_1337#5&41045ef&0&4#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
 
             // try to open the device
-            auto file = CreateFileA(it->first.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-            if (file == INVALID_HANDLE_VALUE)
+            auto handle = CreateFileA(it->first.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+            if (handle == INVALID_HANDLE_VALUE)
                 continue;
 
             // get USB interface
             WINUSB_INTERFACE_HANDLE interface;
-            if (!WinUsb_Initialize(file, &interface)) {
-                CloseHandle(file);
+            if (!WinUsb_Initialize(handle, &interface)) {
+                CloseHandle(handle);
                 continue;
             }
 
             // read device descriptor
             usb::DeviceDescriptor deviceDescriptor;
-              ULONG transferred;
-            bool result = WinUsb_GetDescriptor(interface, int(usb::DescriptorType::DEVICE), 0, 0, (UCHAR*)&deviceDescriptor, sizeof(deviceDescriptor), &transferred);
+            ULONG transferred;
+            bool result = WinUsb_GetDescriptor(interface, int(usb::DescriptorType::DEVICE), 0, 0,
+                (UCHAR*)&deviceDescriptor, sizeof(deviceDescriptor), &transferred);
             if (!result || transferred < sizeof(deviceDescriptor)) {
                 WinUsb_Free(interface);
-                CloseHandle(file);
+                CloseHandle(handle);
                 continue;
             }
 
-            // now check if a filter of a device accepts the device descriptor
+            // check if a filter of a device accepts the device descriptor
             for (Device &device : devices_) {
                 if (device.state_ == Device::State::OPENING && device.filter_(deviceDescriptor)) {
-                    // add file to completion port of event loop
+                    // add handle to completion port of event loop
                     CreateIoCompletionPort(
-                        file,
+                        handle,
                         loop_.port,
                         ULONG_PTR(&static_cast<Loop_Win32::CompletionHandler &>(device)),
                         0);
@@ -106,9 +106,9 @@ void UsbHost_WinUSB::onTimeout() {
                     it->second = &device;
                     device.it_ = it;
 
-                    // connect and transfer ownership of file to device
-                    device.connect(file, interface);
-                    file = INVALID_HANDLE_VALUE;
+                    // connect and transfer ownership of handle to device
+                    device.connect(handle, interface);
+                    handle = INVALID_HANDLE_VALUE;
 
                     // set iterator and flag the device to indicate that it is present
                     device.flag_ = true;
@@ -116,10 +116,10 @@ void UsbHost_WinUSB::onTimeout() {
                 }
             }
 
-            // device was not accepted by any filter, close file and free interface
-            if (file != INVALID_HANDLE_VALUE) {
+            // device was not accepted by any filter, close handle and free interface
+            if (handle != INVALID_HANDLE_VALUE) {
                 WinUsb_Free(interface);
-                CloseHandle(file);
+                CloseHandle(handle);
             }
         } else {
             // flag the device to indicate that it is still present
@@ -147,7 +147,7 @@ UsbHost_WinUSB::Device::Device(UsbHost_WinUSB &host, std::function<bool (const u
 
 UsbHost_WinUSB::Device::~Device() {
     WinUsb_Free(interface_);
-    CloseHandle(file_);
+    CloseHandle(handle_);
 }
 
 void UsbHost_WinUSB::Device::open() {
@@ -177,8 +177,8 @@ static bool getIsoPipeInfo(void *interface, int endpointCount, uint8_t endpointA
     return false;
 }*/
 
-void UsbHost_WinUSB::Device::connect(HANDLE file, void *interface) {
-    file_ = file;
+void UsbHost_WinUSB::Device::connect(HANDLE handle, void *interface) {
+    handle_ = handle;
     interface_ = interface;
 
 
@@ -239,12 +239,12 @@ void UsbHost_WinUSB::Device::disconnect() {
     if (state_ == Device::State::READY) {
         flag_ = false;
         WinUsb_Free(interface_);
-        CloseHandle(file_);
+        CloseHandle(handle_);
         interface_ = nullptr;
-        file_ = INVALID_HANDLE_VALUE;
+        handle_ = INVALID_HANDLE_VALUE;
 
         // erase from device map of host
-        host_.deviceInfos_.erase(it_);
+        host_.deviceMap_.erase(it_);
 
         // set state of device to CLOSING and state of buffers to DISABLED
         state_ = State::DISABLED;
@@ -299,7 +299,7 @@ void UsbHost_WinUSB::Device::onCompletion(OVERLAPPED *overlapped) {
 // ControlBuffer
 
 UsbHost_WinUSB::ControlBuffer::ControlBuffer(int capacity, Device &device)
-    : Buffer(&setup_, sizeof(WINUSB_SETUP_PACKET), new uint8_t[capacity], capacity, device.state_)
+    : Buffer(&setup_, sizeof(setup_), new uint8_t[capacity], capacity, device.state_)
     , device_(device)
 {
     device.controlBuffers_.add(*this);
@@ -342,7 +342,7 @@ bool UsbHost_WinUSB::ControlBuffer::cancel() {
 
     if (steps_ != 0) {
         // cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
-        auto result = CancelIoEx(device_.file_, &overlapped_);
+        auto result = CancelIoEx(device_.handle_, &overlapped_);
         if (!result) {
             int error = GetLastError();
             setSystemError(error);
@@ -374,7 +374,7 @@ bool UsbHost_WinUSB::ControlBuffer::transfer() {
 
 void UsbHost_WinUSB::ControlBuffer::onCompletion(OVERLAPPED *overlapped) {
     DWORD transferred;
-    auto result = GetOverlappedResult(device_.file_, overlapped, &transferred, false);
+    auto result = GetOverlappedResult(device_.handle_, overlapped, &transferred, false);
     if (result) {
         // success
         setSuccess(transferred);
@@ -445,7 +445,7 @@ bool UsbHost_WinUSB::Buffer::cancel() {
     if (steps_ != 0) {
         // cancel the transfer, the io completion port will receive ERROR_OPERATION_ABORTED
         for (int i = index_; i >= 0; --i) {
-            auto result = CancelIoEx(endpoint_.device_.file_, &overlapped_[i]);
+            auto result = CancelIoEx(endpoint_.device_.handle_, &overlapped_[i]);
             if (!result) {
                 int error = GetLastError();
                 setSystemError(error);
@@ -497,7 +497,7 @@ bool UsbHost_WinUSB::Buffer::transfer() {
 void UsbHost_WinUSB::Buffer::onCompletion(OVERLAPPED *overlapped) {
     auto &device = endpoint_.device_;
     DWORD transferred;
-    auto result = GetOverlappedResult(device.file_, overlapped, &transferred, false);
+    auto result = GetOverlappedResult(device.handle_, overlapped, &transferred, false);
     if (result) {
         // transfer OK
         if (index_ > 0) {

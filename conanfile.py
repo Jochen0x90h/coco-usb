@@ -25,6 +25,8 @@ class Project(ConanFile):
     def requirements(self):
         self.requires("coco-loop/linux", options={"platform": self.options.platform})
         self.requires("coco-device/linux", options={"platform": self.options.platform})
+        if self.settings.get_safe("os") == "Linux":
+            self.requires("libudev/system")
 
     def build_requirements(self):
         self.test_requires("coco-devboards/linux", options={"platform": self.options.platform})
@@ -56,5 +58,5 @@ class Project(ConanFile):
 
     def package_info(self):
         self.cpp_info.libs = [self.name]
-        if self.settings.os == "Windows":
+        if self.settings.get_safe("os") == "Windows":
             self.cpp_info.system_libs = ["SetupAPI", "Winusb"]

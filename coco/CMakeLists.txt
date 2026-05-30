@@ -17,12 +17,21 @@ if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
             native/coco/platform/UsbDevice_cout.cpp
     )
     if(WIN32)
-        # WinUSB
+        # Win32/WinUSB
         target_sources(${PROJECT_NAME}
             PUBLIC FILE_SET platform_headers FILES
                 native/coco/platform/UsbHost_WinUSB.hpp
             PRIVATE
                 native/coco/platform/UsbHost_WinUSB.cpp
+        )
+    endif()
+    if(LINUX)
+        # io_uring/libudev
+        target_sources(${PROJECT_NAME}
+            PUBLIC FILE_SET platform_headers FILES
+                native/coco/platform/UsbHost_io_uring.hpp
+            PRIVATE
+                native/coco/platform/UsbHost_io_uring.cpp
         )
     endif()
 elseif(${PLATFORM} MATCHES "^nrf52")
@@ -46,6 +55,9 @@ target_link_libraries(${PROJECT_NAME}
     coco-loop::coco-loop
     coco-device::coco-device
 )
+if(LINUX)
+    target_link_libraries(${PROJECT_NAME} libudev::libudev)
+endif()
 
 target_include_directories(${PROJECT_NAME}
     PUBLIC

@@ -31,6 +31,9 @@ find_package(coco CONFIG)
 find_package(coco-loop CONFIG)
 find_package(coco-device CONFIG)
 find_package(coco-devboards CONFIG)
+if(LINUX)
+    find_package(libudev CONFIG)
+endif()
 
 # source
 add_subdirectory(coco)
