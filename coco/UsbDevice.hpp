@@ -16,7 +16,7 @@ public:
 
     /// @brief Wait for a request to the device (e.g. control request for USB)
     /// @return use co_await on return value to wait until the device receives a request
-    [[nodiscard]] Awaitable<Events> untilRequest() {
+    [[nodiscard]] Awaitable<CoroutineTask<Events>> untilRequest() {
         return {this->tasks_, Events::REQUEST};
     }
 
@@ -35,7 +35,7 @@ public:
     /// @brief Helper for control in transfers, e.g. sending a descriptor to the host
     ///
     template <typename T>
-    [[nodiscard]] static Awaitable<Buffer::Events> controlIn(Buffer &buffer, usb::Setup const &setup, const T &data) {
+    [[nodiscard]] static Awaitable<CoroutineTask<Buffer::Events>> controlIn(Buffer &buffer, usb::Setup const &setup, const T &data) {
         int size = std::min(int(setup.wLength), int(sizeof(data)));
         return buffer.write(reinterpret_cast<const uint8_t *>(&data), size);
     }

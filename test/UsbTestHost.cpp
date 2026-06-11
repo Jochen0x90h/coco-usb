@@ -73,7 +73,7 @@ Coroutine echoTest(Loop &loop, UsbHostDevice &device, Buffer &control, Buffer &b
 
         // wait until USB device gets detected (control buffer becomes ready)
         std::cout << "Wait for USB device..." << std::endl;
-        co_await device.untilReady();
+        co_await device.untilReadyOrDisabled();
 
         // test control request
         if (endpoint == 1) {
