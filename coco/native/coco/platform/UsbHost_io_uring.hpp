@@ -13,7 +13,7 @@
 
 namespace coco {
 
-/// @brief USB host implementation using io_uring
+/// @brief USB host implementation using io_uring and libudev
 class UsbHost_io_uring : public Loop_io_uring::CompletionHandler {
 public:
     UsbHost_io_uring(Loop_io_uring &loop);

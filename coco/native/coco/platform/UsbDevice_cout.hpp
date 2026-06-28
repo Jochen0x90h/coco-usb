@@ -98,8 +98,8 @@ protected:
     IntrusiveList<Endpoint> endpoints_;
 
     // list of active transfers
-    IntrusiveList2<ControlBuffer> controlTransfers_;
-    IntrusiveList2<Buffer> transfers_;
+    IntrusiveList<ControlBuffer, IntrusiveListNode2> controlTransfers_;
+    IntrusiveList<Buffer, IntrusiveListNode2> transfers_;
 };
 
 } // namespace coco
