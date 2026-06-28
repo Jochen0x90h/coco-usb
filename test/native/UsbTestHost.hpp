@@ -22,3 +22,5 @@ struct Drivers {
     Usb::Buffer buffer1{129, endpoint1};
     Usb::Buffer buffer2{129, endpoint2};
 };
+
+Drivers drivers;

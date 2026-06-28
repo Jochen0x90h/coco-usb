@@ -36,7 +36,7 @@ public:
 
     protected:
         bool transfer();
-        //void onCompletion(io_uring_cqe &cqe, int index) override;
+        //void onCompletion(io_uring_cqe &cqe, int id) override;
 
         usb::Setup setup_;
         Device &device_;
@@ -110,7 +110,7 @@ public:
     protected:
         void connect(const std::string& path, int handle);
         void disconnect();
-        void onCompletion(io_uring_cqe &cqe, int index) override;
+        void onCompletion(io_uring_cqe &cqe, int id) override;
 
         UsbHost_io_uring &host_;
         std::function<bool (const usb::DeviceDescriptor &)> filter_;

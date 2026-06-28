@@ -30,8 +30,10 @@ if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
         target_sources(${PROJECT_NAME}
             PUBLIC FILE_SET platform_headers FILES
                 native/coco/platform/UsbHost_io_uring.hpp
+                native/coco/platform/UsbMonitor_udev.hpp
             PRIVATE
                 native/coco/platform/UsbHost_io_uring.cpp
+                native/coco/platform/UsbMonitor_udev.cpp
         )
     endif()
 elseif(${PLATFORM} MATCHES "^nrf52")
@@ -50,19 +52,22 @@ elseif(${PLATFORM} MATCHES "^stm32")
     )
 endif()
 
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+        ..
+)
+
 target_link_libraries(${PROJECT_NAME}
     coco::coco
     coco-loop::coco-loop
     coco-device::coco-device
 )
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} SetupAPI Winusb)
+endif()
 if(LINUX)
     target_link_libraries(${PROJECT_NAME} libudev::libudev)
 endif()
-
-target_include_directories(${PROJECT_NAME}
-    PUBLIC
-        ..
-)
 
 # install the library
 install(TARGETS ${PROJECT_NAME}

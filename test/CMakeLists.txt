@@ -22,9 +22,9 @@ function(board_test TEST BOARD_LIB)
         )
 
         # windows specific libraries
-        if(WIN32)
-            target_link_libraries(${NAME} SetupAPI Winusb)
-        endif()
+        #if(WIN32)
+        #    target_link_libraries(${NAME} SetupAPI Winusb)
+        #endif()
 
         # generate hex file for flashing the target
         if(${CMAKE_CROSSCOMPILING})
@@ -62,3 +62,5 @@ board_test(DfuTest coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansi
 board_test(DfuTest coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
 board_test(DfuTest coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
 board_test(DfuTest coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
+
+board_test(UsbMonitor-Test coco-devboards::native)

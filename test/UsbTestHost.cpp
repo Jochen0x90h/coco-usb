@@ -155,8 +155,6 @@ Coroutine readTest(Loop &loop, Device &device, Buffer &buffer) {
 }
 
 int main() {
-    Drivers drivers;
-
     echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer1, 1);
     echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer2, 2);
 

@@ -32,7 +32,7 @@ UsbHost_io_uring::~UsbHost_io_uring() {
     udev_unref(udev_);
 }
 
-void UsbHost_io_uring::onCompletion(io_uring_cqe &cqe, int index) {
+void UsbHost_io_uring::onCompletion(io_uring_cqe &cqe, int id) {
     if (cqe.res & POLLIN) {
         // poll again
         int fd = udev_monitor_get_fd(mon_);
@@ -226,7 +226,7 @@ void UsbHost_io_uring::Device::disconnect() {
     }
 }
 
-void UsbHost_io_uring::Device::onCompletion(io_uring_cqe &cqe, int index) {
+void UsbHost_io_uring::Device::onCompletion(io_uring_cqe &cqe, int id) {
     if (cqe.res & (POLLERR | POLLHUP | POLLNVAL)) {
         // device disconnected
         disconnect();
