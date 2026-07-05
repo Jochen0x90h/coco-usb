@@ -6,13 +6,13 @@ namespace coco {
 
 namespace {
 
-const char *subsystem = "usb";
-const char *devtype = "usb_device";
+    const char *subsystem = "usb";
+    const char *devtype = "usb_device";
 
-auto getAttribute(struct udev_device *dev, const char* name) {
-    const char *attr = udev_device_get_sysattr_value(dev, name);
-    return attr == nullptr ? String() : String(attr);
-}
+    auto getAttribute(struct udev_device *dev, const char* name) {
+        const char *attr = udev_device_get_sysattr_value(dev, name);
+        return attr == nullptr ? String() : String(attr);
+    }
 
 } // namespace
 
@@ -46,7 +46,7 @@ void UsbMonitor_udev::listenAdd(std::function<void (const std::filesystem::path 
         udev_list_entry_foreach(entry, devices) {
             const char* path = udev_list_entry_get_name(entry);
             struct udev_device* dev = udev_device_new_from_syspath(udev, path);
-            if (dev) {                
+            if (dev) {
                 const char *devtype = udev_device_get_devtype(dev);
                 const char *syspath = udev_device_get_syspath(dev);
                 const char* devnode = udev_device_get_devnode(dev);
@@ -72,7 +72,6 @@ void UsbMonitor_udev::listenAdd(std::function<void (const std::filesystem::path 
         }
         udev_enumerate_unref(enumerate);
     }
-
     if ((action & Action::MONITOR) != 0) {
         addListeners_.push_back(function);
     }
@@ -94,14 +93,14 @@ void UsbMonitor_udev::onCompletion(io_uring_cqe &cqe, int index) {
             const char *action = udev_device_get_action(dev);
             const char *syspath = udev_device_get_syspath(dev);
             const char* devnode = udev_device_get_devnode(dev);
-/*            
+/*
             const char *devtype = udev_device_get_devtype(dev);
             const char* devnode = udev_device_get_devnode(dev);
             const char* sysname = udev_device_get_sysname(dev);
             const char* vendor = udev_device_get_sysattr_value(dev, "idVendor");
             const char* product = udev_device_get_sysattr_value(dev, "idProduct");
 
-            std::cout << "USB Event: " << (action ? action : "?") 
+            std::cout << "USB Event: " << (action ? action : "?")
                         << " | Device: " << (devnode ? devnode : sysname ? sysname : "?")
                         << " | Type: " << (devtype ? devtype : "?")
                         << " | Vendor: " << (vendor ? vendor : "?")

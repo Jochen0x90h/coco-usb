@@ -3,14 +3,13 @@
 #include <coco/String.hpp>
 #include <coco/usb.hpp>
 #include <coco/UsbMonitor.hpp>
-#include <coco/platform/NativeFile.hpp>
 #include <coco/platform/Loop_io_uring.hpp>
 #include <libudev.h>
 
 
 namespace coco {
 
-/// @brief Implementation of UartMonitor using udev.
+/// @brief Implementation of UartMonitor using Linux udev.
 ///
 class UsbMonitor_udev : public UsbMonitor, public Loop_io_uring::CompletionHandler {
 public:

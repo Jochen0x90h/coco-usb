@@ -19,10 +19,10 @@ public:
     };
 
     virtual ~UsbMonitor() {};
-    
+
     /// @brief Listen on add events
     /// @param action Action to perform (enumerate, monitor or both)
-    /// @param function Callback function with path to device, descriptor, vendor, product and serial number
+    /// @param function Callback function with path to device, descriptor, manufacturer, product and serial number
     virtual void listenAdd(std::function<void (const std::filesystem::path &, const usb::DeviceDescriptor &, String, String, String)> function, Action action =
         Action::ENUMERATE_MONITOR) = 0;
 

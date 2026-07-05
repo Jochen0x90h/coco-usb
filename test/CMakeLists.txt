@@ -21,11 +21,6 @@ function(board_test TEST BOARD_LIB)
             ${PROJECT_NAME}
         )
 
-        # windows specific libraries
-        #if(WIN32)
-        #    target_link_libraries(${NAME} SetupAPI Winusb)
-        #endif()
-
         # generate hex file for flashing the target
         if(${CMAKE_CROSSCOMPILING})
             #message("*** Generate Hex for ${NAME} using ${CMAKE_OBJCOPY}")

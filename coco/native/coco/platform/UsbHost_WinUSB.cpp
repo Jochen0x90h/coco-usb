@@ -77,6 +77,8 @@ void UsbHost_WinUSB::onTimeout() {
             // get USB interface
             WINUSB_INTERFACE_HANDLE interface;
             if (!WinUsb_Initialize(handle, &interface)) {
+                int error = GetLastError();
+                int xx = ERROR_INVALID_HANDLE;
                 CloseHandle(handle);
                 continue;
             }

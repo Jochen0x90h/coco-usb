@@ -1,9 +1,9 @@
 #pragma once
 
 #ifdef _WIN32
-#include "UsbMonitor_WinUSB.hpp"
+#include "UsbMonitor_SetupAPI.hpp"
 namespace coco {
-using UsbMonitor_native = UsbMonitor_WinUSB;
+using UsbMonitor_native = UsbMonitor_SetupAPI;
 }
 #endif
 #ifdef __linux__
