@@ -132,6 +132,7 @@ protected:
     void onCompletion(io_uring_cqe &cqe, int index) override;
 
     Loop_io_uring &loop_;
+
     struct udev* udev_;
     struct udev_monitor* mon_;
     std::map<std::string, Device *> deviceMap_; // device path -> device instance

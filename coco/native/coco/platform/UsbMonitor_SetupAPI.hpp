@@ -9,9 +9,9 @@
 
 namespace coco {
 
-/// @brief Implementation of UsbMonitor using SetupAPI and WinUSB.
-/// Polls every second for new devices.
-class UsbMonitor_SetupAPI : public UsbMonitor, public Loop_Win32::TimeoutHandler {
+/// @brief Implementation of UsbMonitor using SetupAPI, WinUSB and a message window.
+/// Note that currently only one instance can exist because of the window class for the message window.
+class UsbMonitor_SetupAPI : public UsbMonitor {
 public:
 
     UsbMonitor_SetupAPI(Loop_Win32 &loop);
@@ -22,20 +22,11 @@ public:
     void listenRemove(std::function<void (const std::filesystem::path &)>);
 
 protected:
-    void onTimeout() override;
+    static LRESULT CALLBACK DeviceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     Loop_Win32 &loop_;
 
-    struct DeviceInfo {
-        usb::DeviceDescriptor descriptor;
-        std::string manufacturer;
-        std::string product;
-        std::string serialNumber;
-
-        // flag for "garbage collection" of devices
-        bool flag;
-    };
-    std::map<std::filesystem::path, DeviceInfo> deviceInfos_;
+    HWND window_;
 
     std::vector<std::function<void (const std::filesystem::path &, const usb::DeviceDescriptor &, String, String, String)>> addListeners_;
     std::vector<std::function<void (const std::filesystem::path &)>> removeListeners_;

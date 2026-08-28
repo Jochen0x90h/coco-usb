@@ -33,29 +33,29 @@ function(board_test TEST BOARD_LIB)
 endfunction()
 
 
-board_test(UsbTest coco-devboards::native)
-board_test(UsbTest coco-devboards::nrf52dongle)
-board_test(UsbTest coco-devboards::canable02)
-board_test(UsbTest coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbTest coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbTest coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbTest coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbTest coco-devboards::nucleo-h503rb)
-board_test(UsbTest coco-devboards::nucleo-u385rg-q)
-board_test(UsbTestHost coco-devboards::native)
+board_test(Usb-Test coco-devboards::native)
+board_test(Usb-Test coco-devboards::nrf52dongle)
+board_test(Usb-Test coco-devboards::canable02)
+board_test(Usb-Test coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Usb-Test coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Usb-Test coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Usb-Test coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Usb-Test coco-devboards::nucleo-h503rb)
+board_test(Usb-Test coco-devboards::nucleo-u385rg-q)
+board_test(Usb-TestHost coco-devboards::native)
 
-board_test(UsbSerialTest coco-devboards::nrf52dongle)
-board_test(UsbSerialTest coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbSerialTest coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbSerialTest coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbSerialTest coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(UsbSerialTest coco-devboards::nucleo-h503rb)
-board_test(UsbSerialTest coco-devboards::nucleo-u385rg-q)
+board_test(UsbSerial-Test coco-devboards::nrf52dongle)
+board_test(UsbSerial-Test coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(UsbSerial-Test coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
+board_test(UsbSerial-Test coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(UsbSerial-Test coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(UsbSerial-Test coco-devboards::nucleo-h503rb)
+board_test(UsbSerial-Test coco-devboards::nucleo-u385rg-q)
 
-board_test(DfuTestHost coco-devboards::native)
-board_test(DfuTest coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(DfuTest coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
-board_test(DfuTest coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
-board_test(DfuTest coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Dfu-TestHost coco-devboards::native)
+board_test(Dfu-Test coco-devboards::nucleo-g0b1re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Dfu-Test coco-devboards::nucleo-g431rb) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Dfu-Test coco-devboards::nucleo-g474re) # with X-NUCLEO-SNK1M1 expansion board
+board_test(Dfu-Test coco-devboards::nucleo-g491re) # with X-NUCLEO-SNK1M1 expansion board
 
 board_test(UsbMonitor-Test coco-devboards::native)

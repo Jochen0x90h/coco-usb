@@ -15,7 +15,7 @@ public:
 
     /// @brief Open the device (transitions to OPENING if in DISABLED state).
     ///
-    virtual void open() = 0;
+    //virtual void open() = 0;
 };
 
 } // namespace coco

@@ -8,7 +8,7 @@ using namespace coco;
 
 // drivers for UsbTestHost
 struct Drivers {
-    Loop_native loop;
+    Loop_native loop{true}; // also process window messages
 
     UsbMonitor_native monitor{loop};
 };

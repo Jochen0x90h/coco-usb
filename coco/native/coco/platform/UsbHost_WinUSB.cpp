@@ -1,9 +1,18 @@
-#include "UsbHost_WinUSB.hpp" // includes Windows.h and winusb.h
-#include <coco/convert.hpp>
-//#include <iostream>
+#include <coco/platform/WindowsDef.hpp>
+#include <windows.h>
+#include <winusb.h>
 #include <SetupAPI.h>
 #include <initguid.h>
 #include <usbiodef.h>
+#include <Dbt.h>
+#include <coco/platform/WindowsUndef.hpp>
+
+#include "UsbHost_WinUSB.hpp"
+#include <coco/convert.hpp>
+//#include <iostream>
+//#include <SetupAPI.h>
+//#include <initguid.h>
+//#include <usbiodef.h>
 
 
 namespace coco {
@@ -11,138 +20,76 @@ namespace coco {
 UsbHost_WinUSB::UsbHost_WinUSB(Loop_Win32 &loop)
     : loop_(loop)
 {
-    // regularly scan for usb devices
-    loop.invoke(*this);
+    // register window class
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = &UsbHost_WinUSB::DeviceWndProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = L"UsbHost";
+    auto result = RegisterClassExW(&wc);
+
+    // create message only window
+    window_ = CreateWindowExW(
+        0,                              // no extended style
+        L"UsbHost",
+        L"",                            // no title
+        0,                              // no styles (no WS_VISIBLE!)
+        0, 0, 0, 0,                     // position/size
+        HWND_MESSAGE,                   // message only window
+        nullptr,
+        GetModuleHandle(nullptr),
+        this
+    );
+    SetWindowLongPtrW(window_, GWLP_USERDATA, (LONG_PTR)this);
+
+    // register device notifications
+    DEV_BROADCAST_DEVICEINTERFACE_W filter = {};
+    filter.dbcc_size = sizeof(filter);
+    filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+    filter.dbcc_classguid  = GUID_DEVINTERFACE_USB_DEVICE;
+    RegisterDeviceNotificationW(
+        window_,
+        &filter,
+        DEVICE_NOTIFY_WINDOW_HANDLE
+    );
 }
 
-//UsbHost_WinUSB::~UsbHost_WinUSB() {
-//}
-/*
-static int parseHex(const char *s) {
-    int value = 0;
-    for (int i = 0; i < 4; ++i) {
-        value <<= 4;
+UsbHost_WinUSB::~UsbHost_WinUSB() {
+    DestroyWindow(window_);
+}
 
-        char ch = s[i];
-        if (ch >= '0' && ch <= '9')
-            value += ch - '0';
-        else if (ch >= 'A' && ch <= 'F')
-            value += ch - 'A' + 10;
-        else if (ch >= 'a' && ch <= 'f')
-            value += ch - 'a' + 10;
-    }
-    return value;
-}*/
+LRESULT CALLBACK UsbHost_WinUSB::DeviceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_DEVICECHANGE:
+        {
+            UsbHost_WinUSB *host = (UsbHost_WinUSB *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            auto *iface = (PDEV_BROADCAST_DEVICEINTERFACE_W)lParam;
+            if (iface && iface->dbcc_devicetype == DBT_DEVTYP_DEVICEINTERFACE) {
+                if (wParam == DBT_DEVICEREMOVECOMPLETE) {
+                    std::filesystem::path path = (wchar_t *)iface->dbcc_name;
 
-void UsbHost_WinUSB::onTimeout() {
-    loop_.invoke(*this, 1s);
-
-    // enumerate devices
-    HDEVINFO deviceInfo = SetupDiGetClassDevsA(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    int index = 0;
-    SP_DEVINFO_DATA deviceData;
-    deviceData.cbSize = sizeof(SP_DEVINFO_DATA);
-    while (SetupDiEnumDeviceInfo(deviceInfo, index, &deviceData)) {
-        ++index;
-
-        // get interface data
-        SP_DEVICE_INTERFACE_DATA interfaceData;
-        interfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
-        if (!SetupDiEnumDeviceInterfaces(deviceInfo, &deviceData, &GUID_DEVINTERFACE_USB_DEVICE, 0, &interfaceData)) {
-            continue;
-        }
-
-        // get device path
-        union {
-            SP_DEVICE_INTERFACE_DETAIL_DATA_A devicePath;
-            uint8_t space[2 + 128];
-        } u;
-        u.devicePath.cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
-        if (!SetupDiGetDeviceInterfaceDetailA(deviceInfo, &interfaceData, &u.devicePath, sizeof(u), nullptr, nullptr)) {
-            // error
-            continue;
-        }
-
-        // check if device is new
-        auto p = deviceMap_.insert(std::map<std::string, Device *>::value_type{u.devicePath.DevicePath, nullptr});
-        auto it = p.first;
-        if (p.second) {
-            // found a new device, path has the form \\?\usb#vid_1915&pid_1337#5&41045ef&0&4#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
-
-            // try to open the device
-            auto handle = CreateFileA(it->first.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-            if (handle == INVALID_HANDLE_VALUE)
-                continue;
-
-            // get USB interface
-            WINUSB_INTERFACE_HANDLE interface;
-            if (!WinUsb_Initialize(handle, &interface)) {
-                int error = GetLastError();
-                int xx = ERROR_INVALID_HANDLE;
-                CloseHandle(handle);
-                continue;
-            }
-
-            // read device descriptor
-            usb::DeviceDescriptor deviceDescriptor;
-            ULONG transferred;
-            bool result = WinUsb_GetDescriptor(interface, int(usb::DescriptorType::DEVICE), 0, 0,
-                (UCHAR*)&deviceDescriptor, sizeof(deviceDescriptor), &transferred);
-            if (!result || transferred < sizeof(deviceDescriptor)) {
-                WinUsb_Free(interface);
-                CloseHandle(handle);
-                continue;
-            }
-
-            // check if a filter of a device accepts the device descriptor
-            for (Device &device : devices_) {
-                if (device.state_ == Device::State::OPENING && device.filter_(deviceDescriptor)) {
-                    // add handle to completion port of event loop
-                    CreateIoCompletionPort(
-                        handle,
-                        loop_.port,
-                        ULONG_PTR(&static_cast<Loop_Win32::CompletionHandler &>(device)),
-                        0);
-
-                    // set device to map and store the iterator to be able to erase the device in disconnect()
-                    it->second = &device;
-                    device.it_ = it;
-
-                    // connect and transfer ownership of handle to device
-                    device.connect(handle, interface);
-                    handle = INVALID_HANDLE_VALUE;
-
-                    // set iterator and flag the device to indicate that it is present
-                    device.flag_ = true;
-                    break;
+                    // close device
+                    for (auto &device : host->devices_) {
+                        if (device.path_ == path)
+                            device.close();
+                    }
                 }
             }
-
-            // device was not accepted by any filter, close handle and free interface
-            if (handle != INVALID_HANDLE_VALUE) {
-                WinUsb_Free(interface);
-                CloseHandle(handle);
-            }
-        } else {
-            // flag the device to indicate that it is still present
-            if (it->second != nullptr)
-                it->second->flag_ = true;
         }
+        return TRUE;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
     }
-
-    // detect devices that have disappeared
-    for (Device &device : devices_) {
-        if (device.ready() && !device.flag_)
-            device.disconnect();
-        device.flag_ = false;
-    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 
 // Device
 
-UsbHost_WinUSB::Device::Device(UsbHost_WinUSB &host, std::function<bool (const usb::DeviceDescriptor &)> filter)
-    : UsbHostDevice(State::DISABLED), host_(host), filter_(filter)
+UsbHost_WinUSB::Device::Device(UsbHost_WinUSB &host)
+    : UsbHostDevice(State::DISABLED)
+    , host_(host)
 {
     host.devices_.add(*this);
 }
@@ -152,11 +99,108 @@ UsbHost_WinUSB::Device::~Device() {
     CloseHandle(handle_);
 }
 
-void UsbHost_WinUSB::Device::open() {
-    if (state_ == State::DISABLED) {
-        state_ = State::OPENING;
-        notify(Events::ENTER_OPENING);
+bool UsbHost_WinUSB::Device::open(const std::filesystem::path &path) {
+    if (handle_ != INVALID_HANDLE_VALUE)
+        return false;
+
+    // open the device
+    auto handle = CreateFileW(path.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        0, // no sharing
+        nullptr, // no security
+        OPEN_EXISTING, // open only existing device
+        FILE_FLAG_OVERLAPPED,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        int error = GetLastError();
+        setSystemError(error);
+        return false;
     }
+
+    // get USB interface
+    WINUSB_INTERFACE_HANDLE interface;
+    if (!WinUsb_Initialize(handle, &interface)) {
+        int error = GetLastError();
+        setSystemError(error);
+        CloseHandle(handle);
+        return false;
+    }
+
+    auto &host = host_;
+
+    // add handle to completion port of event loop
+    CreateIoCompletionPort(
+        handle,
+        host.loop_.port,
+        ULONG_PTR(&static_cast<Loop_Win32::CompletionHandler &>(*this)),
+        0);
+
+    path_ = path;
+    handle_ = handle;
+    interface_ = interface;
+    setSuccess();
+
+    USB_INTERFACE_DESCRIPTOR interfaceDescriptor;
+    auto result = WinUsb_QueryInterfaceSettings(interface, 0, &interfaceDescriptor);
+
+    // set state
+    state_ = State::READY;
+
+    // enable buffers
+    for (auto &buffer : controlBuffers_) {
+        buffer.setReady();
+    }
+    for (auto &endpoint : endpoints_) {
+        endpoint.state_ = State::READY;
+        for (auto &buffer : endpoint.buffers_) {
+            buffer.setReady();
+        }
+
+        // resume all coroutines waiting for state change
+        endpoint.notify(Events::ENTER_READY);
+    }
+
+    // resume all coroutines waiting for state change
+    notify(Events::ENTER_READY);
+
+    return true;
+}
+
+void UsbHost_WinUSB::Device::close() {
+    if (handle_ == INVALID_HANDLE_VALUE)
+        return;
+
+    // close interface
+    WinUsb_Free(interface_);
+    interface_ = nullptr;
+
+    // close handle
+    CloseHandle(handle_);
+    handle_ = INVALID_HANDLE_VALUE;
+
+    // clear path
+    path_.clear();
+    setSuccess();
+
+    // set state
+    state_ = State::DISABLED;
+
+    // disable buffers
+    for (auto &buffer : controlBuffers_) {
+        buffer.setDisabled();
+    }
+    for (auto &endpoint : endpoints_) {
+        endpoint.state_ = State::DISABLED;
+        for (auto &buffer : endpoint.buffers_) {
+            buffer.setDisabled();
+        }
+
+        // resume all coroutines waiting for state change
+        endpoint.notify(Events::ENTER_CLOSING | Events::ENTER_DISABLED);
+    }
+
+    // resume all coroutines waiting for state change
+    notify(Events::ENTER_CLOSING | Events::ENTER_DISABLED);
 }
 
 /*
@@ -179,95 +223,6 @@ static bool getIsoPipeInfo(void *interface, int endpointCount, uint8_t endpointA
     return false;
 }*/
 
-void UsbHost_WinUSB::Device::connect(HANDLE handle, void *interface) {
-    handle_ = handle;
-    interface_ = interface;
-
-
-    USB_INTERFACE_DESCRIPTOR interfaceDescriptor;
-    auto result = WinUsb_QueryInterfaceSettings(interface, 0, &interfaceDescriptor);
-/*
-    // allocate buffers of isochronous endpoints
-    for (auto &endpoint : isoEndpoints) {
-        WINUSB_PIPE_INFORMATION_EX pipeInfo;
-        if ((endpoint.inAddress & 0x7f) != 0) {
-            if (getIsoPipeInfo(interface, interfaceDescriptor.bNumEndpoints, endpoint.inAddress, pipeInfo)) {
-                int packetSize = pipeInfo.MaximumBytesPerInterval;
-                int packetCount = (endpoint.duration * (8 / pipeInfo.Interval) + 1) / 3;
-                int bufferSize = packetCount * packetSize;
-
-                uint8_t *buffer = new uint8_t[bufferSize * 3];
-
-                WINUSB_ISOCH_BUFFER_HANDLE bufferHandle;
-                result = WinUsb_RegisterIsochBuffer(
-                    interface,
-                    endpoint.inAddress,
-                    buffer,
-                    bufferSize * 3,
-                    &bufferHandle);
-
-                endpoint.inPacketSize = packetSize;
-                endpoint.inPacketCount = packetCount;
-                endpoint.inBufferSize = bufferSize;
-                endpoint.inBuffer = buffer;
-                endpoint.inBufferHandle = bufferHandle;
-                endpoint.inPacketDescriptors = new USBD_ISO_PACKET_DESCRIPTOR[packetCount * 3];
-
-            }
-        }
-    }
-*/
-
-    // set state of device and buffers to READY
-    state_ = State::READY;
-    for (auto &buffer : controlBuffers_) {
-        buffer.setReady();
-    }
-    for (auto &endpoint : endpoints_) {
-        endpoint.state_ = State::READY;
-        for (auto &buffer : endpoint.buffers_) {
-            buffer.setReady();
-        }
-
-        // resume coroutines waiting for state change
-        endpoint.notify(Events::ENTER_READY);
-    }
-
-    // resume coroutines waiting for state change
-    notify(Events::ENTER_READY);
-}
-
-void UsbHost_WinUSB::Device::disconnect() {
-    if (state_ == Device::State::READY) {
-        flag_ = false;
-        WinUsb_Free(interface_);
-        CloseHandle(handle_);
-        interface_ = nullptr;
-        handle_ = INVALID_HANDLE_VALUE;
-
-        // erase from device map of host
-        host_.deviceMap_.erase(it_);
-
-        // set state of device to CLOSING and state of buffers to DISABLED
-        state_ = State::DISABLED;
-        for (auto &buffer : controlBuffers_) {
-            buffer.setDisabled();
-        }
-        for (auto &endpoint : endpoints_) {
-            endpoint.state_ = State::DISABLED;
-            for (auto &buffer : endpoint.buffers_) {
-                buffer.setDisabled();
-            }
-
-            // resume coroutines waiting for state change
-            endpoint.notify(Events::ENTER_CLOSING | Events::ENTER_DISABLED);
-        }
-
-        // resume coroutines waiting for state change
-        notify(Events::ENTER_CLOSING | Events::ENTER_DISABLED);
-    }
-}
-
 void UsbHost_WinUSB::Device::onCompletion(OVERLAPPED *overlapped) {
     for (auto &buffer : controlBuffers_) {
         if (overlapped == &buffer.overlapped_) {
@@ -283,18 +238,6 @@ void UsbHost_WinUSB::Device::onCompletion(OVERLAPPED *overlapped) {
             }
         }
     }
-    /*for (auto &buffer : controlTransfers_) {
-        if (overlapped == &buffer.overlapped_) {
-            buffer.handle(overlapped);
-            return;
-        }
-    }
-    for (auto &buffer : transfers_) {
-        if (overlapped == &buffer.overlapped_[buffer.index_]) {
-            buffer.handle(overlapped);
-            return;
-        }
-    }*/
 }
 
 
@@ -324,9 +267,6 @@ bool UsbHost_WinUSB::ControlBuffer::start() {
     }
 
     steps_ = 1;
-
-    // add to list of pending transfers
-    //device_.controlTransfers_.add(*this);
 
     // start transfer
     if (!transfer())
@@ -388,11 +328,8 @@ void UsbHost_WinUSB::ControlBuffer::onCompletion(OVERLAPPED *overlapped) {
 
         // check if the USB device was disconnected
         if (error == ERROR_GEN_FAILURE)
-            device_.disconnect();
+            device_.close();//disconnect();
     }
-
-    // remove from list of active transfers
-    //remove2();
 
     // transfer finished
     setReady();
@@ -424,9 +361,6 @@ bool UsbHost_WinUSB::Buffer::start() {
     }
 
     auto &device = endpoint_.device_;
-
-    // add to list of pending transfers
-    //device.transfers_.add(*this);
 
     steps_ = int(op_ & Op::READ_WRITE);
 
@@ -525,11 +459,8 @@ void UsbHost_WinUSB::Buffer::onCompletion(OVERLAPPED *overlapped) {
 
         // check if the USB device was disconnected
         if (error == ERROR_GEN_FAILURE)
-            device.disconnect();
+            device.close();
     }
-
-    // remove from list of active transfers
-    //remove2();
 
     // transfer finished
     setReady();

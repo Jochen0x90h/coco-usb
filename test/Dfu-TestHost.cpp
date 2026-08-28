@@ -2,7 +2,9 @@
 #include <coco/String.hpp>
 #include <coco/StringBuffer.hpp>
 #include <coco/StreamOperators.hpp>
-#include <DfuTestHost.hpp>
+#include <coco/convert.hpp>
+#include <coco/debug.hpp>
+#include <Dfu-TestHost.hpp>
 #include <iostream>
 #include <iomanip>
 
@@ -79,7 +81,12 @@ Coroutine readTest(Loop &loop, Device &device, Buffer &buffer) {
 }
 
 int main() {
-    Drivers drivers;
+    // add listener that opens the usb device as soon as it appears
+    drivers.monitor.listenAdd([](const std::filesystem::path &path, auto &descriptor, String manufacturer, String product, String serial) {
+        debug::out << hex(descriptor.idVendor) << ' ' << hex(descriptor.idProduct) << " (" << path.string() << ")\n";
+        if (descriptor.idVendor == 0x1209 && descriptor.idProduct == 0x0003)
+            drivers.device.open(path);
+    });
 
     dfuTest(drivers.loop, drivers.device, drivers.controlBuffer);
 

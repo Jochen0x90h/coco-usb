@@ -37,6 +37,7 @@ UsbMonitor_udev::~UsbMonitor_udev() {
 
 void UsbMonitor_udev::listenAdd(std::function<void (const std::filesystem::path &, const usb::DeviceDescriptor &, String, String, String)> function, Action action) {
     if ((action & Action::ENUMERATE) != 0) {
+        // enumerate devices
         auto udev = udev_;
         auto enumerate = udev_enumerate_new(udev);
         udev_enumerate_add_match_subsystem(enumerate, subsystem);

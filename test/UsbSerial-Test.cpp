@@ -1,4 +1,4 @@
-#include <UsbSerialTest.hpp>
+#include <UsbSerial-Test.hpp>
 #include <coco/Loop.hpp>
 #include <coco/convert.hpp>
 #include <coco/debug.hpp>

@@ -3,19 +3,20 @@
 #include <coco/usb.hpp>
 #include <coco/platform/Loop_native.hpp>
 #include <coco/platform/UsbHost_native.hpp>
+#include <coco/platform/UsbMonitor_native.hpp>
 
 
 using namespace coco;
 
 // drivers for UsbTestHost
 struct Drivers {
-    Loop_native loop;
+    Loop_native loop{true}; // also process window messages
+
+    UsbMonitor_native monitor{loop};
 
     using Usb = UsbHost_native;
     Usb host{loop};
-    Usb::Device device{host, [](const usb::DeviceDescriptor &deviceDescriptor) {
-        return deviceDescriptor.idVendor == 0x1209 && deviceDescriptor.idProduct == 0x0001;
-    }};
+    Usb::Device device{host};
     Usb::ControlBuffer controlBuffer{32, device};
     Usb::Endpoint endpoint1{device, 1};
     Usb::Endpoint endpoint2{device, 2};

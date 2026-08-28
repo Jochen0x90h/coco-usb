@@ -2,7 +2,9 @@
 #include <coco/String.hpp>
 #include <coco/StringBuffer.hpp>
 #include <coco/StreamOperators.hpp>
-#include <UsbTestHost.hpp>
+#include <coco/convert.hpp>
+#include <coco/debug.hpp>
+#include <Usb-TestHost.hpp>
 #include <iostream>
 #include <iomanip>
 
@@ -69,11 +71,11 @@ void printStatus(int endpoint, String message, bool ok) {
 // test echo coroutine in device (i.e. write to device and check if it returns the same data)
 Coroutine echoTest(Loop &loop, UsbHostDevice &device, Buffer &control, Buffer &buffer, int endpoint) {
     while (true) {
-        device.open();
+        //device.open();
 
         // wait until USB device gets detected (control buffer becomes ready)
         std::cout << "Wait for USB device..." << std::endl;
-        co_await device.untilReadyOrDisabled();
+        co_await device.untilReady();//OrDisabled();
 
         // test control request
         if (endpoint == 1) {
@@ -155,8 +157,15 @@ Coroutine readTest(Loop &loop, Device &device, Buffer &buffer) {
 }
 
 int main() {
+    // add listener that opens the usb device as soon as it appears
+    drivers.monitor.listenAdd([](const std::filesystem::path &path, auto &descriptor, String manufacturer, String product, String serial) {
+        debug::out << hex(descriptor.idVendor) << ' ' << hex(descriptor.idProduct) << " (" << path.string() << ")\n";
+        if (descriptor.idVendor == 0x1209 && descriptor.idProduct == 0x0001)
+            drivers.device.open(path);
+    });
+
     echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer1, 1);
-    echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer2, 2);
+    //echoTest(drivers.loop, drivers.device, drivers.controlBuffer, drivers.buffer2, 2);
 
     //readTest(drivers.loop, drivers.device, drivers.buffer1);
 

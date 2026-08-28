@@ -1,4 +1,4 @@
-#include <DfuTest.hpp>
+#include <Dfu-Test.hpp>
 #include <coco/Loop.hpp>
 #include <coco/debug.hpp>
 #include <coco/StreamOperators.hpp>

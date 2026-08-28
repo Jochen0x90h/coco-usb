@@ -8,16 +8,18 @@
 #include <string>
 #include <map>
 #include <functional>
+#include <filesystem>
 
 
 namespace coco {
 
 /// @brief USB host implementation using Win32 and WinUsb
 /// https://learn.microsoft.com/en-us/windows/win32/api/winusb/
-class UsbHost_WinUSB : public Loop_Win32::TimeoutHandler {
+/// Note that currently only one instance can exist because of the window class for the message window.
+class UsbHost_WinUSB {
 public:
     UsbHost_WinUSB(Loop_Win32 &loop);
-    //~UsbHost_WinUSB() override;
+    ~UsbHost_WinUSB();
 
 
     class Device;
@@ -100,25 +102,33 @@ public:
         /// @brief Constructor.
         /// @param host usb host
         /// @param filter Filter to indicate if an usb device is handled by this device instance
-        Device(UsbHost_WinUSB &host, std::function<bool (const usb::DeviceDescriptor &)> filter);
+        Device(UsbHost_WinUSB &host);
 
         ~Device() override;
 
+        /// @brief Open device by path.
+        /// Fails if already open. Calling close() does nothing if the device is not open.
+        bool open(const std::filesystem::path &path);
+
+        void close() override;
+
         //void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
 
-        void open() override;
+        //void open() override;
 
     protected:
-        void connect(HANDLE handle, void *interface);
-        void disconnect();
+        //void connect(HANDLE handle, void *interface);
+        //void disconnect();
         void onCompletion(OVERLAPPED *overlapped) override;
 
         UsbHost_WinUSB &host_;
-        std::function<bool (const usb::DeviceDescriptor &)> filter_;
 
         // iterator of device list and flag for remove detection
         std::map<std::string, Device *>::iterator it_;
         bool flag_;
+
+        // device path, needed for removal
+        std::filesystem::path path_;
 
         // device handle and WinUsb interface
         HANDLE handle_ = INVALID_HANDLE_VALUE;
@@ -129,17 +139,17 @@ public:
 
         // list of all bulk/interrupt endpoints
         IntrusiveList<Endpoint> endpoints_;
-
-        // pending transfers (needed to queue transfers when device is in OPENING or PAUSE state)
-        //IntrusiveList2<ControlBuffer> controlTransfers_;
-        //IntrusiveList2<Buffer> transfers_;
     };
 
 protected:
-    void onTimeout() override;
+    //void onTimeout() override;
+    static LRESULT CALLBACK DeviceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     Loop_Win32 &loop_;
-    std::map<std::string, Device *> deviceMap_; // device path -> device instance
+
+    // device monitor for disconnecting devices
+    HWND window_;
+
     IntrusiveList<Device> devices_;
 };
 

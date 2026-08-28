@@ -12,7 +12,7 @@ using namespace coco;
 int main() {
     debug::out << "UsbMonitor-Test\n";
 
-    drivers.monitor.listenAdd([](const std::filesystem::path &device, auto &descriptor, String manufacturer, String product, String serial) {
+    drivers.monitor.listenAdd([](const std::filesystem::path &path, auto &descriptor, String manufacturer, String product, String serial) {
         debug::out << hex(descriptor.idVendor) << ':' << hex(descriptor.idProduct) << ' ';
         if (!manufacturer.empty())
             debug::out << manufacturer << ' ';
@@ -20,10 +20,10 @@ int main() {
             debug::out << product << ' ';
         if (!serial.empty())
             debug::out << '[' << serial << ']';
-        debug::out << " (" << device.string() << ")\n";
+        debug::out << " (" << path.string() << ")\n";
     });
-    drivers.monitor.listenRemove([](const std::filesystem::path &device) {
-        debug::out << " (" << device.string() << ")\n";
+    drivers.monitor.listenRemove([](const std::filesystem::path &path) {
+        debug::out << " (" << path.string() << ")\n";
     });
 
     drivers.loop.run();
