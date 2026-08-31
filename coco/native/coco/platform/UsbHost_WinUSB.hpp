@@ -109,12 +109,9 @@ public:
         /// @brief Open device by path.
         /// Fails if already open. Calling close() does nothing if the device is not open.
         bool open(const std::filesystem::path &path);
-
         void close() override;
 
         //void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
-
-        //void open() override;
 
     protected:
         //void connect(HANDLE handle, void *interface);

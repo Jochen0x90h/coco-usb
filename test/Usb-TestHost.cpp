@@ -69,7 +69,7 @@ void printStatus(int endpoint, String message, bool ok) {
 }
 
 // test echo coroutine in device (i.e. write to device and check if it returns the same data)
-Coroutine echoTest(Loop &loop, UsbHostDevice &device, Buffer &control, Buffer &buffer, int endpoint) {
+Coroutine echoTest(Loop &loop, Drivers::UsbDevice &device, Buffer &control, Buffer &buffer, int endpoint) {
     while (true) {
         //device.open();
 

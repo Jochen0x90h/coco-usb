@@ -4,7 +4,6 @@ target_sources(${PROJECT_NAME}
     PUBLIC FILE_SET headers TYPE HEADERS FILES
         usb.hpp
         UsbDevice.hpp
-        UsbHostDevice.hpp
 )
 
 if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
@@ -12,7 +11,7 @@ if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
     target_sources(${PROJECT_NAME}
         PUBLIC FILE_SET platform_headers TYPE HEADERS BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/native FILES
             native/coco/platform/UsbDevice_cout.hpp
-            native/coco/platform/UsbHost_native.hpp
+            native/coco/platform/UsbHostDevice_native.hpp
         PRIVATE
             native/coco/platform/UsbDevice_cout.cpp
     )
@@ -31,10 +30,10 @@ if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
         # io_uring/libudev
         target_sources(${PROJECT_NAME}
             PUBLIC FILE_SET platform_headers FILES
-                native/coco/platform/UsbHost_io_uring.hpp
+                native/coco/platform/UsbHostDevice_io_uring.hpp
                 native/coco/platform/UsbMonitor_udev.hpp
             PRIVATE
-                native/coco/platform/UsbHost_io_uring.cpp
+                native/coco/platform/UsbHostDevice_io_uring.cpp
                 native/coco/platform/UsbMonitor_udev.cpp
         )
     endif()

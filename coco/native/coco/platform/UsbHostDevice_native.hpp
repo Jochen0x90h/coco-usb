@@ -7,8 +7,8 @@ using UsbHost_native = UsbHost_WinUSB;
 }
 #endif
 #ifdef __linux__
-#include "UsbHost_io_uring.hpp"
+#include "UsbHostDevice_io_uring.hpp"
 namespace coco {
-using UsbHost_native = UsbHost_io_uring;
+using UsbHostDevice_native = UsbHostDevice_io_uring;
 }
 #endif
