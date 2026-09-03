@@ -9,8 +9,6 @@
 
 namespace coco {
 
-// Device
-
 UsbHostDevice_io_uring::UsbHostDevice_io_uring(Loop_io_uring &loop)
     : Device(State::DISABLED)
     , loop_(loop)
@@ -21,7 +19,7 @@ UsbHostDevice_io_uring::~UsbHostDevice_io_uring() {
     close();
 }
 
-bool UsbHostDevice_io_uring::open(const std::filesystem::path &path) {
+bool UsbHostDevice_io_uring::open(DevicePath path) {
     if (handle_ != INVALID_HANDLE_VALUE)
         return false;
 
@@ -335,7 +333,7 @@ void UsbHostDevice_io_uring::Buffer::onCompletion() {
                 steps_ &= ~0x80; // unmark ZLP step
                 return;
             }
-            
+
             // transfer finished
             setSuccess();
         } else {

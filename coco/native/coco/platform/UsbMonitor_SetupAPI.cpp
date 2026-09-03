@@ -18,12 +18,12 @@ namespace {
     // buffer for device path and string descriptors
     union Buffer {
         SP_DEVICE_INTERFACE_DETAIL_DATA_W devicePath;
-        usb::StringDescriptor<128> stringDescriptor;
-
+        wchar_t stringBuffer[128];
         Buffer() {};
     };
 
-    std::string readStringDescriptor(WINUSB_INTERFACE_HANDLE interface, int id, usb::StringDescriptor<128> &descriptor) {
+    std::string readStringDescriptor(WINUSB_INTERFACE_HANDLE interface, int id) {
+        usb::StringDescriptor<128> descriptor;
         ULONG transferred;
         bool result = WinUsb_GetDescriptor(interface, int(usb::DescriptorType::STRING), id, 0x0409,
             (UCHAR *)&descriptor, sizeof(descriptor), &transferred);
@@ -51,6 +51,7 @@ namespace {
 UsbMonitor_SetupAPI::UsbMonitor_SetupAPI(Loop_Win32 &loop)
     : loop_(loop)
 {
+    /*
     // register window class
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -83,13 +84,15 @@ UsbMonitor_SetupAPI::UsbMonitor_SetupAPI(Loop_Win32 &loop)
         &filter,
         DEVICE_NOTIFY_WINDOW_HANDLE
     );
+    */
+   loop.addDeviceHandler(*this);
 }
 
 UsbMonitor_SetupAPI::~UsbMonitor_SetupAPI() {
     DestroyWindow(window_);
 }
 
-void UsbMonitor_SetupAPI::listenAdd(std::function<void (const std::filesystem::path &, const usb::DeviceDescriptor &, String, String, String)> function, Action action) {
+void UsbMonitor_SetupAPI::listenAdd(std::function<void (DevicePath, const usb::DeviceDescriptor &, String, String, String)> function, Action action) {
     if ((action & Action::ENUMERATE) != 0) {
         // enumerate devices
         HDEVINFO devs = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -119,7 +122,7 @@ void UsbMonitor_SetupAPI::listenAdd(std::function<void (const std::filesystem::p
             }
 
             // found a new device, path has the form \\?\usb#vid_1915&pid_1337#5&41045ef&0&4#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
-            std::filesystem::path path = (wchar_t *)buffer.devicePath.DevicePath;
+            DevicePath path = (wchar_t *)buffer.devicePath.DevicePath;
             usb::DeviceDescriptor descriptor;
 
             // try to open the device
@@ -145,9 +148,9 @@ void UsbMonitor_SetupAPI::listenAdd(std::function<void (const std::filesystem::p
             }
 
             // read string descriptors
-            std::string manufacturer = readStringDescriptor(interface, descriptor.iManufacturer, buffer.stringDescriptor);
-            std::string product = readStringDescriptor(interface, descriptor.iProduct, buffer.stringDescriptor);
-            std::string serialNumber = readStringDescriptor(interface, descriptor.iSerialNumber, buffer.stringDescriptor);
+            std::string manufacturer = readStringDescriptor(interface, descriptor.iManufacturer);
+            std::string product = readStringDescriptor(interface, descriptor.iProduct);
+            std::string serialNumber = readStringDescriptor(interface, descriptor.iSerialNumber);
 
             // close device
             WinUsb_Free(interface);
@@ -162,10 +165,66 @@ void UsbMonitor_SetupAPI::listenAdd(std::function<void (const std::filesystem::p
     }
 }
 
-void UsbMonitor_SetupAPI::listenRemove(std::function<void (const std::filesystem::path &)> function) {
+void UsbMonitor_SetupAPI::listenRemove(std::function<void (DevicePath)> function) {
     removeListeners_.push_back(function);
 }
 
+void UsbMonitor_SetupAPI::onDeviceChange(Loop_Win32::DeviceType type, bool add, DevicePath path) {
+    if (type != Loop_Win32::DeviceType::USB)
+        return;
+
+    if (add) {
+        // try to open the device
+        auto handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return;
+
+        // get USB interface
+        WINUSB_INTERFACE_HANDLE interface;
+        if (!WinUsb_Initialize(handle, &interface)) {
+            CloseHandle(handle);
+            return;
+        }
+
+        // read device descriptor
+        usb::DeviceDescriptor descriptor;
+        ULONG transferred;
+        bool result = WinUsb_GetDescriptor(interface, int(usb::DescriptorType::DEVICE), 0, 0,
+            (UCHAR*)&descriptor, sizeof(descriptor), &transferred);
+        if (!result || transferred < sizeof(descriptor)) {
+            WinUsb_Free(interface);
+            CloseHandle(handle);
+            return;
+        }
+
+        // buffer for string descriptors
+        Buffer buffer;
+
+        // read string descriptors
+        std::string manufacturer = readStringDescriptor(interface, descriptor.iManufacturer);
+        std::string product = readStringDescriptor(interface, descriptor.iProduct);
+        std::string serialNumber = readStringDescriptor(interface, descriptor.iSerialNumber);
+
+        // close device
+        WinUsb_Free(interface);
+        CloseHandle(handle);
+
+        // call add listeners
+        for (auto &function : addListeners_) {
+            function(path,
+                descriptor,
+                manufacturer,
+                product,
+                serialNumber);
+        }
+    } else {
+        // call remove listeners
+        for (auto &function : removeListeners_) {
+            function(path);
+        }
+    }
+}
+/*
 LRESULT CALLBACK UsbMonitor_SetupAPI::DeviceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_DEVICECHANGE:
@@ -233,6 +292,6 @@ LRESULT CALLBACK UsbMonitor_SetupAPI::DeviceWndProc(HWND hwnd, UINT msg, WPARAM 
         return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
-}
+}*/
 
 } // namespace coco

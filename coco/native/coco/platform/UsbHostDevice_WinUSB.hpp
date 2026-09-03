@@ -2,13 +2,12 @@
 
 #include <coco/BufferDevice.hpp>
 #include <coco/usb.hpp>
-#include <coco/platform/Loop_io_uring.hpp>
+#include <coco/platform/Loop_Win32.hpp> // includes Windows.h
+#include <winusb.h>
 #include <string>
 #include <map>
-#include <filesystem>
 #include <functional>
-#include <libudev.h>
-#include <linux/usbdevice_fs.h>
+#include <filesystem>
 
 
 namespace coco {
@@ -16,30 +15,31 @@ namespace coco {
 /// @brief USB device as seen by the host.
 /// Use UsbMonitor to wait for the connection of your device, then use open() to connect to the device.
 /// The device will disconnect automatically when it is removed.
-class UsbHostDevice_io_uring : public Device, public Loop_io_uring::CompletionHandler {
+class UsbHostDevice_WinUSB : public Device, public Loop_Win32::CompletionHandler, public Loop_Win32::DeviceHandler {
+    friend class UsbHost_WinUSB;
 public:
     /// @brief Constructor.
     /// @param loop Event loop
-    UsbHostDevice_io_uring(Loop_io_uring &loop);
+    UsbHostDevice_WinUSB(Loop_Win32 &loop);
 
-    ~UsbHostDevice_io_uring() override;
+    ~UsbHostDevice_WinUSB() override;
 
-    //void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
-
-    /// @brief Open the device.
+    /// @brief Open device by path.
     /// Calling open() or close() on a device that is already open or closed does nothing.
     /// @param path Path to device, e.g. obtained from UsbMonitor
     /// @return true when successful
     bool open(DevicePath path);
     void close() override;
 
+    //void getDescriptor(usb::DescriptorType type, void *data, int &size) override;
+
 
     /// @brief Buffer for control transfers
     /// Max size is 512 according to spec: https://www.techdesignforums.com/practice/technique/usb-3-0-protocol-layer-2/
-    class ControlBuffer : public coco::Buffer, public coco::IntrusiveListNode  {
-        friend class UsbHostDevice_io_uring;
+    class ControlBuffer : public coco::Buffer, public coco::IntrusiveListNode {
+        friend class UsbHostDevice_WinUSB;
     public:
-        ControlBuffer(int capacity, UsbHostDevice_io_uring &device);
+        ControlBuffer(int capacity, UsbHostDevice_WinUSB &device);
         ~ControlBuffer() override;
 
         // Buffer methods
@@ -48,10 +48,11 @@ public:
 
     protected:
         bool transfer();
-        //void onCompletion(io_uring_cqe &cqe, int id) override;
+        void onCompletion(OVERLAPPED *overlapped);
 
-        usb::Setup setup_;
-        UsbHostDevice_io_uring &device_;
+        UsbHostDevice_WinUSB &device_;
+        WINUSB_SETUP_PACKET setup_;
+        OVERLAPPED overlapped_;
     };
 
 
@@ -60,7 +61,7 @@ public:
     /// @brief Buffer for transferring data to/from an endpoint
     ///
     class Buffer : public coco::Buffer, public coco::IntrusiveListNode {
-        friend class UsbHostDevice_io_uring;
+        friend class UsbHostDevice_WinUSB;
     public:
         Buffer(int capacity, Endpoint &endpoint);
         ~Buffer() override;
@@ -71,22 +72,22 @@ public:
 
     protected:
         bool transfer();
-        void onCompletion();
+        void onCompletion(OVERLAPPED *overlapped);
 
         Endpoint &endpoint_;
 
-        struct usbdevfs_urb *urb_;
-        struct usbdevfs_urb *urb0_;
+        OVERLAPPED overlapped_[2];
+        int index_;
     };
 
     /// @brief Bulk/Interrupt endpoint
     ///
     class Endpoint : public BufferDevice, public coco::IntrusiveListNode {
-        friend class UsbHostDevice_io_uring;
+        friend class UsbHostDevice_WinUSB;
         friend class Buffer;
     public:
-        Endpoint(UsbHostDevice_io_uring &device, int inAddress, int outAddress);
-        Endpoint(UsbHostDevice_io_uring &device, int address) : Endpoint(device,  usb::IN | address, usb::OUT | address) {}
+        Endpoint(UsbHostDevice_WinUSB &device, int inAddress, int outAddress);
+        Endpoint(UsbHostDevice_WinUSB &device, int address) : Endpoint(device,  usb::IN | address, usb::OUT | address) {}
         ~Endpoint();
 
         // BufferDevice methods
@@ -94,7 +95,7 @@ public:
         Buffer &getBuffer(int index) override;
 
     protected:
-        UsbHostDevice_io_uring &device_;
+        UsbHostDevice_WinUSB &device_;
         int inAddress_;
         int outAddress_;
 
@@ -102,14 +103,26 @@ public:
         IntrusiveList<Buffer> buffers_;
     };
 
+
 protected:
-    void onCompletion(io_uring_cqe &cqe, int id) override;
+    // Loop_Win32::CompletionHandler methods
+    void onCompletion(OVERLAPPED *overlapped) override;
 
-    Loop_io_uring &loop_;
+    // Loop_Win32::DeviceHandler methods
+    void onDeviceChange(Loop_Win32::DeviceType type, bool add, DevicePath path) override;
 
-    // device handle
-    static constexpr int INVALID_HANDLE_VALUE = -1;
-    int handle_ = INVALID_HANDLE_VALUE;
+    Loop_Win32 &loop_;
+
+    // iterator of device list and flag for remove detection
+    std::map<std::string, Device *>::iterator it_;
+    bool flag_;
+
+    // device path, needed for removal
+    std::filesystem::path path_;
+
+    // device handle and WinUsb interface
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    WINUSB_INTERFACE_HANDLE interface_ = nullptr;
 
     // list of all buffers for control endpoint
     IntrusiveList<ControlBuffer> controlBuffers_;

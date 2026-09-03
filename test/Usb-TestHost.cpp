@@ -158,8 +158,8 @@ Coroutine readTest(Loop &loop, Device &device, Buffer &buffer) {
 
 int main() {
     // add listener that opens the usb device as soon as it appears
-    drivers.monitor.listenAdd([](const std::filesystem::path &path, auto &descriptor, String manufacturer, String product, String serial) {
-        debug::out << hex(descriptor.idVendor) << ' ' << hex(descriptor.idProduct) << " (" << path.string() << ")\n";
+    drivers.monitor.listenAdd([](DevicePath path, auto &descriptor, String manufacturer, String product, String serial) {
+        debug::out << hex(descriptor.idVendor) << ' ' << hex(descriptor.idProduct) << " (" << path << ")\n";
         if (descriptor.idVendor == 0x1209 && descriptor.idProduct == 0x0001)
             drivers.device.open(path);
     });

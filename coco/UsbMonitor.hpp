@@ -1,8 +1,8 @@
 #pragma once
 
 #include "usb.hpp"
+#include <coco/DevicePath.hpp>
 #include <coco/enum.hpp>
-#include <filesystem>
 #include <functional>
 
 
@@ -23,13 +23,13 @@ public:
     /// @brief Listen on add events
     /// @param action Action to perform (enumerate, monitor or both)
     /// @param function Callback function with path to device, descriptor, manufacturer, product and serial number
-    virtual void listenAdd(std::function<void (const std::filesystem::path &, const usb::DeviceDescriptor &, String, String, String)> function, Action action =
+    virtual void listenAdd(std::function<void (DevicePath, const usb::DeviceDescriptor &, String, String, String)> function, Action action =
         Action::ENUMERATE_MONITOR) = 0;
 
     /// @brief Listen on remove events
     /// @param action Action to perform (enumerate, monitor or both)
     /// @param function Callback function with path to device
-    virtual void listenRemove(std::function<void (const std::filesystem::path &)>) = 0;
+    virtual void listenRemove(std::function<void (DevicePath)>) = 0;
 };
 COCO_ENUM(UsbMonitor::Action);
 

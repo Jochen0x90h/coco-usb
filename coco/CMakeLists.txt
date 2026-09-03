@@ -19,10 +19,10 @@ if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
         # Win32/WinUSB
         target_sources(${PROJECT_NAME}
             PUBLIC FILE_SET platform_headers FILES
-                native/coco/platform/UsbHost_WinUSB.hpp
+                native/coco/platform/UsbHostDevice_WinUSB.hpp
                 native/coco/platform/UsbMonitor_SetupAPI.hpp
             PRIVATE
-                native/coco/platform/UsbHost_WinUSB.cpp
+                native/coco/platform/UsbHostDevice_WinUSB.cpp
                 native/coco/platform/UsbMonitor_SetupAPI.cpp
         )
     endif()

@@ -35,7 +35,7 @@ UsbMonitor_udev::~UsbMonitor_udev() {
     udev_unref(udev_);
 }
 
-void UsbMonitor_udev::listenAdd(std::function<void (const std::filesystem::path &, const usb::DeviceDescriptor &, String, String, String)> function, Action action) {
+void UsbMonitor_udev::listenAdd(std::function<void (DevicePath, const usb::DeviceDescriptor &, String, String, String)> function, Action action) {
     if ((action & Action::ENUMERATE) != 0) {
         // enumerate devices
         auto udev = udev_;
@@ -78,7 +78,7 @@ void UsbMonitor_udev::listenAdd(std::function<void (const std::filesystem::path 
     }
 }
 
-void UsbMonitor_udev::listenRemove(std::function<void (const std::filesystem::path &)> function) {
+void UsbMonitor_udev::listenRemove(std::function<void (DevicePath)> function) {
     removeListeners_.push_back(function);
 }
 
