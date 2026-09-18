@@ -15,9 +15,11 @@
 using namespace coco;
 namespace msos20 = usb::msos20;
 
+
 constexpr int USB_VID = 0x1209; // https://pid.codes/1209/
 constexpr int USB_PID = 0x0001; // test PID
 constexpr int USB_DEVICE_VERSION = 0x0100; // device version 1.00
+
 
 // string id
 enum class StringId : uint8_t {
@@ -26,6 +28,7 @@ enum class StringId : uint8_t {
     PRODUCT = 2,
     SERIAL = 3,
 };
+
 
 // vendor specific control request
 enum class VendorRequest : uint8_t {
@@ -116,7 +119,7 @@ const usb::StringDescriptor<1> languages = {
     .wString = {0x0409} // English (United States)
 };
 const auto manufacturerString = usb::makeStringDescriptor(u"CoCo");
-const auto productString = usb::makeStringDescriptor(u"UsbTest");
+const auto productString = usb::makeStringDescriptor(u"Usb-Test");
 const auto serialString = usb::makeStringDescriptor(u"12345");
 
 
@@ -136,7 +139,7 @@ struct WinUsbDescriptor {
     //msos20::ConfigurationSubsetHeader configHeader;
     //msos20::FunctionSubsetHeader functionHeader;
     msos20::CompatibleIdDescriptor compatibleId;
-    msos20::RegistryPropertyDescriptor<21, 40> registryProperty;
+    msos20::RegistryPropertyDescriptor<21, 40> registryProperty; // length of PropertyName and PropertyData
 };
 static_assert(sizeof(WinUsbDescriptor) <= CONTROL_BUFFER_SIZE);
 
@@ -167,17 +170,17 @@ static const WinUsbDescriptor winUsbDescriptor {
         .wSubsetLength = sizeof(WinUsbDescriptor) - sizeof(msos20::DescriptorSetHeader) - sizeof(msos20::ConfigurationSubsetHeader),
     },*/
     .compatibleId = {
-        .CompatibleID = "WINUSB"//{'W','I','N','U','S','B',0,0}
+        .CompatibleID = "WINUSB"
     },
     .registryProperty = {
         // list of utf-16 strings
         .wPropertyDataType = msos20::PropertyDatatype::MULTI_SZ,
 
         // property DeviceInterfaceGUIDs
-        .PropertyName = u"DeviceInterfaceGUIDs",//{'D','e','v','i','c','e','I','n','t','e','r','f','a','c','e','G','U','I','D','s',0},
+        .PropertyName = u"DeviceInterfaceGUIDs",
 
         // custom generated UUID for our device (additional zero termination for list of strings)
-        .PropertyData = u"{cabf2319-8394-49c1-98c8-12656d393ce0}\0"//{'{','f','6','1','3','4','4','d','8','-','e','f','1','d','-','4','3','e','e','-','8','8','7','c','-','b','b','a','7','2','0','1','8','f','a','c','f','}',0,0}
+        .PropertyData = u"{cabf2319-8394-49c1-98c8-12656d393ce0}\0"
     }
 };
 
@@ -370,7 +373,7 @@ Coroutine echo(Loop &loop, Device &device, Buffer &buffer) {
 
 
 int main() {
-    debug::out << "UsbTest\n";
+    debug::out << "Usb-Test\n";
 
     // start to receive from usb host
     control(drivers.usb, drivers.controlBuffer);

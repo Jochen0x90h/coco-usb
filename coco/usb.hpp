@@ -1,6 +1,7 @@
 #pragma once
 
 #include <coco/enum.hpp>
+#include <coco/PackedValue.hpp>
 #include <coco/platform/compiler.hpp>
 #include <cstdint>
 
@@ -854,7 +855,13 @@ enum class State : uint8_t {
 
 /// @brief DFU status report, reply to DFU_GETSTATUS request
 ///
-COCO_PACK_BEGIN struct StatusReport {
+struct alignas(2) StatusReport {
+    E8<Status> bStatus;
+    U24Lo bwPollTimeout;
+    E8<State> bState;
+    U8 iString;
+};
+/*COCO_PACK_BEGIN struct StatusReport {
     Status bStatus;
 
     uint8_t bwPollTimeout;
@@ -863,7 +870,7 @@ COCO_PACK_BEGIN struct StatusReport {
     State bState;
 
     uint8_t iString;
-} COCO_PACK_END
+} COCO_PACK_END*/
 
 } // namespace dfu
 

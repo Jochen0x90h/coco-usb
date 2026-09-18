@@ -2,8 +2,8 @@
 #include <windows.h>
 #include <winusb.h>
 #include <SetupAPI.h>
-#include <initguid.h>
-#include <usbiodef.h>
+#include <initguid.h> // DEFINE_GUID needed for GUIDs
+#include <usbiodef.h> // GUID_DEVINTERFACE_USB_DEVICE
 #include <Dbt.h>
 #include <coco/platform/WindowsUndef.hpp>
 
@@ -51,40 +51,6 @@ namespace {
 UsbMonitor_SetupAPI::UsbMonitor_SetupAPI(Loop_Win32 &loop)
     : loop_(loop)
 {
-    /*
-    // register window class
-    WNDCLASSEXW wc = {};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = &UsbMonitor_SetupAPI::DeviceWndProc;
-    wc.hInstance = GetModuleHandle(nullptr);
-    wc.lpszClassName = L"UsbMonitor";
-    auto result = RegisterClassExW(&wc);
-
-    // create message only window
-    window_ = CreateWindowExW(
-        0,                              // no extended style
-        L"UsbMonitor",
-        L"",                            // no title
-        0,                              // no styles (no WS_VISIBLE!)
-        0, 0, 0, 0,                     // position/size
-        HWND_MESSAGE,                   // message only window
-        nullptr,
-        GetModuleHandle(nullptr),
-        this
-    );
-    SetWindowLongPtrW(window_, GWLP_USERDATA, (LONG_PTR)this);
-
-    // register device notifications
-    DEV_BROADCAST_DEVICEINTERFACE_W filter = {};
-    filter.dbcc_size = sizeof(filter);
-    filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
-    filter.dbcc_classguid  = GUID_DEVINTERFACE_USB_DEVICE;
-    RegisterDeviceNotificationW(
-        window_,
-        &filter,
-        DEVICE_NOTIFY_WINDOW_HANDLE
-    );
-    */
    loop.addDeviceHandler(*this);
 }
 
@@ -224,74 +190,5 @@ void UsbMonitor_SetupAPI::onDeviceChange(Loop_Win32::DeviceType type, bool add, 
         }
     }
 }
-/*
-LRESULT CALLBACK UsbMonitor_SetupAPI::DeviceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_DEVICECHANGE:
-        {
-            UsbMonitor_SetupAPI *monitor = (UsbMonitor_SetupAPI *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-            auto *iface = (PDEV_BROADCAST_DEVICEINTERFACE_W)lParam;
-            if (iface && iface->dbcc_devicetype == DBT_DEVTYP_DEVICEINTERFACE) {
-                std::filesystem::path path = (wchar_t *)iface->dbcc_name;
-                if (wParam == DBT_DEVICEARRIVAL) {
-                    usb::DeviceDescriptor descriptor;
-
-                    // try to open the device
-                    auto handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-                    if (handle == INVALID_HANDLE_VALUE)
-                        return TRUE;
-
-                    // get USB interface
-                    WINUSB_INTERFACE_HANDLE interface;
-                    if (!WinUsb_Initialize(handle, &interface)) {
-                        CloseHandle(handle);
-                        return TRUE;
-                    }
-
-                    // read device descriptor
-                    ULONG transferred;
-                    bool result = WinUsb_GetDescriptor(interface, int(usb::DescriptorType::DEVICE), 0, 0,
-                        (UCHAR*)&descriptor, sizeof(descriptor), &transferred);
-                    if (!result || transferred < sizeof(descriptor)) {
-                        WinUsb_Free(interface);
-                        CloseHandle(handle);
-                        return TRUE;
-                    }
-
-                    // buffer for string descriptors
-                    Buffer buffer;
-
-                    // read string descriptors
-                    std::string manufacturer = readStringDescriptor(interface, descriptor.iManufacturer, buffer.stringDescriptor);
-                    std::string product = readStringDescriptor(interface, descriptor.iProduct, buffer.stringDescriptor);
-                    std::string serialNumber = readStringDescriptor(interface, descriptor.iSerialNumber, buffer.stringDescriptor);
-
-                    // close device
-                    WinUsb_Free(interface);
-                    CloseHandle(handle);
-
-                    // call add listeners
-                    for (auto &function : monitor->addListeners_) {
-                        function(path, descriptor,
-                            manufacturer,
-                            product,
-                            serialNumber);
-                    }
-
-                } else if (wParam == DBT_DEVICEREMOVECOMPLETE) {
-                    // call remove listeners
-                    for (auto &function : monitor->removeListeners_) {
-                        function(path);
-                    }
-                }
-            }
-        }
-        return TRUE;
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-    }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}*/
 
 } // namespace coco

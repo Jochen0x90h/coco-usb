@@ -29,7 +29,7 @@ public:
     /// @brief Listen on remove events
     /// @param action Action to perform (enumerate, monitor or both)
     /// @param function Callback function with path to device
-    virtual void listenRemove(std::function<void (DevicePath)>) = 0;
+    virtual void listenRemove(std::function<void (DevicePath)> function) = 0;
 };
 COCO_ENUM(UsbMonitor::Action);
 

@@ -220,10 +220,9 @@ Coroutine control(UsbDevice &device, Buffer &buffer) {
                         auto &status = buffer.cast<usb::dfu::StatusReport &>();
                         status = {
                             usb::dfu::Status::OK,
-                            200, 0, // 200ms
+                            200, // 200ms
                             usb::dfu::State::APP_IDLE,
-                            0 // status description string index
-                        };
+                            0}; // status description string index
                         co_await buffer.write(std::min(int(setup.wLength), int(sizeof(usb::dfu::StatusReport))));
                     }
                     break;
@@ -353,7 +352,7 @@ Coroutine status(Loop &loop, Device &device, Buffer &buffer) {
 
 int main() {
     debug::setGreen();
-    debug::out << "UsbSerialTest\n";
+    debug::out << "UsbSerial-Test\n";
 
     control(drivers.usb, drivers.controlBuffer);
     echo(drivers.usb, drivers.dataBuffer);

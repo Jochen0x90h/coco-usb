@@ -20,7 +20,7 @@ public:
 
     // UsbMonitor methods
     void listenAdd(std::function<void (DevicePath, const usb::DeviceDescriptor &, String, String, String)> function, Action action = Action::ENUMERATE_MONITOR) override;
-    void listenRemove(std::function<void (DevicePath)>) override;
+    void listenRemove(std::function<void (DevicePath)> function) override;
 
 protected:
     //static LRESULT CALLBACK DeviceWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

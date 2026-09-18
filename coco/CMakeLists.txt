@@ -4,6 +4,7 @@ target_sources(${PROJECT_NAME}
     PUBLIC FILE_SET headers TYPE HEADERS FILES
         usb.hpp
         UsbDevice.hpp
+        UsbMonitor.hpp
 )
 
 if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
@@ -12,6 +13,7 @@ if(${PLATFORM} STREQUAL "native" OR ${PLATFORM} STREQUAL "emu")
         PUBLIC FILE_SET platform_headers TYPE HEADERS BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/native FILES
             native/coco/platform/UsbDevice_cout.hpp
             native/coco/platform/UsbHostDevice_native.hpp
+            native/coco/platform/UsbMonitor_native.hpp
         PRIVATE
             native/coco/platform/UsbDevice_cout.cpp
     )
