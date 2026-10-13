@@ -1,4 +1,4 @@
-#include <UsbMonitor-Test.hpp>
+#include <UsbMonitorTest.hpp>
 #include <coco/convert.hpp>
 #include <coco/debug.hpp>
 

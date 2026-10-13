@@ -4,7 +4,7 @@
 #include <coco/StreamOperators.hpp>
 #include <coco/convert.hpp>
 #include <coco/debug.hpp>
-#include <Dfu-TestHost.hpp>
+#include <DfuTestHost.hpp>
 #include <iostream>
 #include <iomanip>
 

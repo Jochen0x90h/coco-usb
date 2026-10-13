@@ -4,7 +4,7 @@
 #include <coco/StreamOperators.hpp>
 #include <coco/convert.hpp>
 #include <coco/debug.hpp>
-#include <Usb-TestHost.hpp>
+#include <UsbTestHost.hpp>
 #include <iostream>
 #include <iomanip>
 
